@@ -85,8 +85,13 @@ export interface AuthorizationDecision {
    */
   reason: string;
   /**
-   * Column allowlist the route must project with, when the matrix grants partial
-   * visibility. `undefined` means every column the row exposes.
+   * Column allowlist for the permitted action, when the matrix grants only partial
+   * access to the row. `undefined` means every column the row exposes.
+   *
+   * On a `read` it is the projection the route must `.select()` with — a
+   * `service_provider` seeing a tenant's name only. On an `update` it is the set of
+   * columns the route may write — a caller editing their own profile. Both are things
+   * Row Level Security structurally cannot express, because RLS is row-level.
    */
   fields?: readonly string[];
 }
@@ -100,6 +105,18 @@ const DENY = (reason: string): AuthorizationDecision => ({ allowed: false, reaso
  * knock on the right door, nothing else. Exported so a route and its test agree.
  */
 export const PROVIDER_TENANT_FIELDS: readonly string[] = ['id', 'organization_id', 'full_name'];
+
+/**
+ * The only columns a caller may change on their own `profiles` row (§4 amendment A6).
+ *
+ * `id` and `auth_user_id` are absent, and that absence is the security property. `0002`'s
+ * `profiles_update_self` policy pins both in its `with check`, because a caller who could
+ * rewrite `auth_user_id` would point their profile at another person's `auth.users` row
+ * and inherit that person's memberships, tenancies and tickets. This is the application
+ * -space half of the same guard: a route builds its `UPDATE` from this list, so the two
+ * dangerous columns are unreachable rather than merely rejected.
+ */
+export const PROFILE_SELF_MUTABLE_FIELDS: readonly string[] = ['full_name', 'email', 'phone'];
 
 /* ---------------------------------------------------------------- policies -- */
 
@@ -178,13 +195,15 @@ const POLICIES: Record<ResourceType, Record<MemberRole, Rule>> = {
    * Staff read any same-organization profile; a tenant and a provider read only their
    * own. This is the row that stops a tenant enumerating the other tenants in a
    * building (acceptance criterion: no tenant sees another tenant's personal data).
+   *
+   * Every role may update its own row and no other (§4 amendment A6). See `profileRule`.
    */
   profile: {
-    organization_admin: readOnly(sameOrganization, 'same_organization_profile'),
-    property_manager: readOnly(sameOrganization, 'same_organization_profile'),
-    property_owner: readOnly(sameOrganization, 'same_organization_profile'),
-    tenant: readOnly(isSelfProfile, 'self_profile_only'),
-    service_provider: readOnly(isSelfProfile, 'self_profile_only'),
+    organization_admin: profileRule(sameOrganization, 'same_organization_profile'),
+    property_manager: profileRule(sameOrganization, 'same_organization_profile'),
+    property_owner: profileRule(sameOrganization, 'same_organization_profile'),
+    tenant: profileRule(isSelfProfile, 'self_profile_only'),
+    service_provider: profileRule(isSelfProfile, 'self_profile_only'),
   },
 
   /** Only an administrator manages membership; invitation writes go through RPCs. */
@@ -272,10 +291,11 @@ const POLICIES: Record<ResourceType, Record<MemberRole, Rule>> = {
   /**
    * Append-only everywhere. `0003`'s `block_activity_mutation` trigger rejects UPDATE
    * and DELETE even for service-role, so an `update` grant here would be a lie.
-   * `organization_admin` reads but does not append, per the matrix.
+   * `organization_admin` appends on the same terms as a manager (§4 amendment A8:
+   * `0002`'s `maintenance_activities_insert_admin`); `property_owner` reads only.
    */
   maintenance_activity: {
-    organization_admin: readOnly(sameOrganization, 'admin_reads_activity'),
+    organization_admin: appendOnly(sameOrganization, 'admin_appends_activity'),
     property_manager: appendOnly(sameOrganization, 'manager_appends_activity'),
     property_owner: readOnly(isOwnedProperty, 'owned_property_activity'),
     tenant: appendOnly(isOwnTenant, 'own_ticket_activity'),
@@ -336,6 +356,36 @@ const POLICIES: Record<ResourceType, Record<MemberRole, Rule>> = {
     service_provider: NONE,
   },
 };
+
+/**
+ * The `profiles` row (§4 amendment A6).
+ *
+ * Read scope varies by role — staff and owners see any same-organization profile, a
+ * tenant and a provider see only their own. Update scope does not vary: **every role may
+ * update only its own row**, and only the columns in `PROFILE_SELF_MUTABLE_FIELDS`.
+ *
+ * Creation is denied for all five roles with no exception. `0003` creates the row from an
+ * `auth.users` AFTER INSERT trigger; `0002` deliberately has no client INSERT policy,
+ * because a client that could insert its own profile could choose its own `id` and
+ * pre-empt a pending invitation.
+ */
+function profileRule(
+  readPredicate: (m: Membership, r: ResourceRef) => boolean,
+  readReason: string,
+): Rule {
+  return (m, r, action) => {
+    if (action === 'read') {
+      return readPredicate(m, r) ? ALLOW(readReason) : DENY(readReason);
+    }
+    if (action === 'update') {
+      return isSelfProfile(m, r)
+        ? ALLOW('self_profile_update', PROFILE_SELF_MUTABLE_FIELDS)
+        : DENY('self_profile_update_only');
+    }
+    // Includes `create`: profile rows are never created by a client.
+    return DENY('profile_write_not_permitted');
+  };
+}
 
 /** Create and read, never update, archive or delete. For immutable tables. */
 function appendOnly(predicate: (m: Membership, r: ResourceRef) => boolean, reason: string): Rule {
@@ -428,6 +478,22 @@ export function projectionFor(
   resource: ResourceRef,
 ): readonly string[] | null {
   const decision = authorize(membership, 'read', resource);
+  if (!decision.allowed) return [];
+  return decision.fields ?? null;
+}
+
+/**
+ * The column allowlist for a permitted update, or `null` for "every writable column".
+ *
+ * Returns `[]` when the update is denied outright. A route building an `UPDATE` from this
+ * list cannot write a column the matrix withheld — which is how `profiles.auth_user_id`
+ * stays immutable in application space as well as in `0002`'s `with check`.
+ */
+export function writableFieldsFor(
+  membership: Membership,
+  resource: ResourceRef,
+): readonly string[] | null {
+  const decision = authorize(membership, 'update', resource);
   if (!decision.allowed) return [];
   return decision.fields ?? null;
 }

@@ -25,6 +25,16 @@
  *    `lib/auth/authorize.ts` has already allowed the operation in application space.
  */
 
+/**
+ * Build-time guard. The `server-only` package resolves to a module that throws under any
+ * condition but React's `react-server`, so importing this file from a client component is
+ * a BUILD failure — not a lint error, and not a runtime assertion that fires after the
+ * bundle has already shipped. The ESLint `server-only` path rule and the
+ * `assertServerRuntime` call below are both kept: three independent guards, each
+ * catching what the others cannot.
+ */
+import 'server-only';
+
 import { createClient } from '@supabase/supabase-js';
 
 import { assertServerRuntime, publicEnv } from '@/lib/env';

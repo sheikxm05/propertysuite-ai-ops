@@ -14,6 +14,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  PROFILE_SELF_MUTABLE_FIELDS,
   PROVIDER_TENANT_FIELDS,
   authorize,
   assertAuthorized,
@@ -21,6 +22,7 @@ import {
   knownResourceTypes,
   knownRoles,
   projectionFor,
+  writableFieldsFor,
   type Action,
   type ResourceRef,
   type ResourceType,
@@ -105,13 +107,15 @@ const MATRIX: Record<ResourceType, Record<string, Expectation>> = {
     service_provider: { r: T, c: F, u: F, a: F, fr: T },
   },
 
-  // profiles | R self + same-org (staff and owner) | R self only (tenant, provider)
+  // profiles | R self + same-org (staff and owner) | R self only (tenant, provider).
+  // Amendment A6: every role additionally has `U self` — and only self. Creation stays
+  // denied for all five: the row comes from 0003's auth.users trigger.
   profile: {
-    organization_admin: { r: T, c: F, u: F, a: F, fr: T },
-    property_manager: { r: T, c: F, u: F, a: F, fr: T },
-    property_owner: { r: T, c: F, u: F, a: F, fr: T },
-    tenant: { r: T, c: F, u: F, a: F, fr: F },
-    service_provider: { r: T, c: F, u: F, a: F, fr: F },
+    organization_admin: { r: T, c: F, u: T, a: F, fr: T },
+    property_manager: { r: T, c: F, u: T, a: F, fr: T },
+    property_owner: { r: T, c: F, u: T, a: F, fr: T },
+    tenant: { r: T, c: F, u: T, a: F, fr: F },
+    service_provider: { r: T, c: F, u: T, a: F, fr: F },
   },
 
   // organization_members | RW admin | R staff/owner | R self tenant/provider
@@ -176,9 +180,10 @@ const MATRIX: Record<ResourceType, Record<string, Expectation>> = {
     service_provider: { r: T, c: F, u: T, a: F, fr: F },
   },
 
-  // maintenance_activities | R admin | CR manager | R owned | CR own | CR assigned
+  // maintenance_activities | CR admin (amendment A8) | CR manager | R owned | CR own |
+  // CR assigned
   maintenance_activity: {
-    organization_admin: { r: T, c: F, u: F, a: F, fr: T },
+    organization_admin: { r: T, c: T, u: F, a: F, fr: T },
     property_manager: { r: T, c: T, u: F, a: F, fr: T },
     property_owner: { r: T, c: F, u: F, a: F, fr: F },
     tenant: { r: T, c: T, u: F, a: F, fr: F },
@@ -447,5 +452,104 @@ describe('assertAuthorized', () => {
       expect(denied.action).toBe('update');
       expect(denied.reason).toMatch(/^[a-z][a-z0-9_]*$/);
     }
+  });
+});
+
+describe('profiles self-update (§4 amendment A6)', () => {
+  it('lets every role update its own row', () => {
+    for (const role of ROLES) {
+      const decision = authorize(membershipFor(role), 'update', ownRow('profile'));
+      expect(decision.allowed, role).toBe(true);
+      expect(decision.reason, role).toBe('self_profile_update');
+    }
+  });
+
+  it("refuses every role another person's row, including an administrator", () => {
+    for (const role of ROLES) {
+      const decision = authorize(membershipFor(role), 'update', foreignRow('profile'));
+      expect(decision.allowed, role).toBe(false);
+      expect(decision.reason, role).toBe('self_profile_update_only');
+    }
+  });
+
+  it('exposes only full_name, email and phone as writable', () => {
+    expect(writableFieldsFor(membershipFor('tenant'), ownRow('profile'))).toEqual(
+      PROFILE_SELF_MUTABLE_FIELDS,
+    );
+  });
+
+  it('never exposes id or auth_user_id as writable — the takeover guard', () => {
+    // A caller who could rewrite auth_user_id would point their profile at another
+    // person's auth.users row and inherit their memberships, tenancies and tickets.
+    // 0002's `profiles_update_self` pins both in its `with check`; this is the
+    // application-space half of the same guard.
+    expect(PROFILE_SELF_MUTABLE_FIELDS).not.toContain('auth_user_id');
+    expect(PROFILE_SELF_MUTABLE_FIELDS).not.toContain('id');
+    for (const role of ROLES) {
+      const writable = writableFieldsFor(membershipFor(role), ownRow('profile')) ?? [];
+      expect(writable, role).not.toContain('auth_user_id');
+      expect(writable, role).not.toContain('id');
+    }
+  });
+
+  it('returns an empty writable set when the update is denied', () => {
+    expect(writableFieldsFor(membershipFor('tenant'), foreignRow('profile'))).toEqual([]);
+  });
+
+  it('still refuses profile creation to every role', () => {
+    for (const role of ROLES) {
+      const decision = authorize(membershipFor(role), 'create', ownRow('profile'));
+      expect(decision.allowed, role).toBe(false);
+      expect(decision.reason, role).toBe('profile_write_not_permitted');
+    }
+  });
+
+  it('still refuses profile archive and delete to every role', () => {
+    for (const role of ROLES) {
+      expect(authorize(membershipFor(role), 'archive', ownRow('profile')).allowed).toBe(false);
+      expect(authorize(membershipFor(role), 'delete', ownRow('profile')).allowed).toBe(false);
+    }
+  });
+
+  it('refuses a self-update across the organization boundary', () => {
+    const decision = authorize(membershipFor('organization_admin'), 'update', {
+      ...ownRow('profile'),
+      organizationId: ORG_B,
+    });
+    expect(decision).toEqual({ allowed: false, reason: 'cross_organization' });
+  });
+});
+
+describe('administrator activity append (§4 amendment A8)', () => {
+  it('lets an administrator append on the same terms as a manager', () => {
+    const admin = authorize(
+      membershipFor('organization_admin'),
+      'create',
+      ownRow('maintenance_activity'),
+    );
+    const manager = authorize(
+      membershipFor('property_manager'),
+      'create',
+      ownRow('maintenance_activity'),
+    );
+    expect(admin.allowed).toBe(true);
+    expect(manager.allowed).toBe(true);
+  });
+
+  it('still refuses an administrator mutating an activity', () => {
+    // 0003's block_activity_mutation rejects UPDATE and DELETE even for service-role.
+    for (const action of ['update', 'archive', 'delete'] as Action[]) {
+      expect(
+        authorize(membershipFor('organization_admin'), action, ownRow('maintenance_activity'))
+          .allowed,
+        action,
+      ).toBe(false);
+    }
+  });
+
+  it('still refuses a property owner appending', () => {
+    expect(
+      authorize(membershipFor('property_owner'), 'create', ownRow('maintenance_activity')).allowed,
+    ).toBe(false);
   });
 });

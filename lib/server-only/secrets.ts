@@ -17,6 +17,16 @@
  * and no secret field name appears on it. See CLAUDE.md rule 8.
  */
 
+/**
+ * Build-time guard. The `server-only` package resolves to a module that throws under any
+ * condition but React's `react-server`, so importing this file from a client component is
+ * a BUILD failure — not a lint error, and not a runtime assertion that fires after the
+ * bundle has already shipped. The ESLint `server-only` path rule and the
+ * `assertServerRuntime` call below are both kept: three independent guards, each
+ * catching what the others cannot.
+ */
+import 'server-only';
+
 import { z } from 'zod';
 
 import { assertServerRuntime, parseEnvOrThrow } from '@/lib/env';

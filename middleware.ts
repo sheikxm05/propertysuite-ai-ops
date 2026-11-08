@@ -19,7 +19,7 @@
  *    the server component or through `withApiHandler`.
  *  - It does not guard `/api/**`. A route handler must answer an unauthenticated caller
  *    with the frozen `UNAUTHENTICATED` envelope and a 401, not with a 307 to an HTML
- *    login page. `withApiHandler` does that.
+ *    sign-in page. `withApiHandler` does that.
  *
  * Route-group note: `(dashboard)` is a Next.js route group, so it contributes nothing to
  * the URL. The protected prefixes below are the actual URLs of the pages under
@@ -44,11 +44,16 @@ const PROTECTED_PREFIXES = [
   '/documents',
 ] as const;
 
-/** URL prefixes rendered by `app/(auth)/**`. A signed-in visitor is sent onward. */
-const AUTH_PREFIXES = ['/login', '/sign-up', '/forgot-password', '/accept-invitation'] as const;
+/**
+ * URL prefixes rendered by `app/(auth)/**`. A signed-in visitor is sent onward.
+ *
+ * Frozen by §5 amendment A5. These must match w1-l1's page slugs exactly: a mismatch
+ * sends every unauthenticated visitor to a 404 while this gate still reports success.
+ */
+const AUTH_PREFIXES = ['/sign-in', '/sign-up', '/forgot-password', '/accept-invitation'] as const;
 
 /** Where an unauthenticated visitor is sent. */
-const SIGN_IN_PATH = '/login';
+const SIGN_IN_PATH = '/sign-in';
 
 /** Where an already-authenticated visitor on an auth page is sent. */
 const SIGNED_IN_HOME = '/dashboard';
@@ -59,8 +64,8 @@ const RETURN_TO = 'next';
 export async function middleware(request: NextRequest): Promise<NextResponse> {
   const { pathname } = request.nextUrl;
 
-  // Always refresh, even on an auth page: a visitor arriving at /login with a valid but
-  // stale cookie should be recognised rather than asked to sign in again.
+  // Always refresh, even on an auth page: a visitor arriving at /sign-in with a valid
+  // but stale cookie should be recognised rather than asked to sign in again.
   const { userId, response } = await updateSession(request);
 
   if (!userId && isProtected(pathname)) {
@@ -106,7 +111,7 @@ export const config = {
     '/maintenance',
     '/documents/:path*',
     '/documents',
-    '/login',
+    '/sign-in',
     '/sign-up',
     '/forgot-password',
     '/accept-invitation/:path*',
@@ -129,7 +134,7 @@ function isAuthPage(pathname: string): boolean {
 /**
  * The path to return to after sign-in, as a **relative** path.
  *
- * An open redirect is a real vulnerability here: `?next=https://evil.example` on a login
+ * An open redirect is a real vulnerability here: `?next=https://evil.example` on a sign-in
  * link would hand a freshly authenticated user to another origin. Only the pathname and
  * query survive, so the value can never leave this origin.
  */

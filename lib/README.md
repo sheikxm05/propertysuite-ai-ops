@@ -65,20 +65,45 @@ export const POST = withApiHandler(
 | `rate-limit/index.ts`                   | Per-user token bucket, stricter on `/api/v1/ai/*`               |
 | `../middleware.ts`                      | Edge gate in front of the `(dashboard)` route group             |
 
+## Amendments this lane implements
+
+| Amendment | Effect                                                                           |
+| --------- | -------------------------------------------------------------------------------- |
+| §4 A6     | `profiles` gains `U self`; `full_name`, `email`, `phone` only. No create.        |
+| §4 A8     | `organization_admin` gains `C` on `maintenance_activities`.                      |
+| §5.2 A13  | `ctx.params` and `ctx.request` added to the handler context.                     |
+| §5.2 A14  | `withPrivilegedApiHandler` is the only route to `ctx.serviceRole`.               |
+| §5.4 A15  | `@shared/index` is the canonical import specifier.                               |
+| §5 A5     | Auth slugs are `/sign-in`, `/sign-up`, `/forgot-password`, `/accept-invitation`. |
+
 ## Decisions worth knowing before you edit
 
 **Authorization is enforced twice.** `supabase/migrations/0002` encodes the §4 matrix in
 Postgres; `auth/authorize.ts` encodes the same matrix in TypeScript. Each must deny on
 the assumption the other has a bug. Do not "simplify" by deleting one.
 
-**`authorize` also does column projection.** RLS is row-level and cannot hide a column,
-so the matrix cell "service provider sees a tenant's name only" is enforced by
-`decision.fields` / `projectionFor()`. A route that ignores it leaks tenant email and
-phone while the RLS suite stays green.
+**`authorize` also does column-level work, which RLS cannot.** RLS grants or denies a
+row; it cannot hide or freeze a column. Two matrix cells depend on that:
+
+- _Read:_ "a service provider sees a tenant's name only" → `projectionFor()`. A route
+  that ignores it leaks tenant email and phone while the RLS suite stays green.
+- _Write:_ "a caller may update their own profile" (§4 amendment A6) →
+  `writableFieldsFor()`, which returns `PROFILE_SELF_MUTABLE_FIELDS` and deliberately
+  omits `id` and `auth_user_id`. Build the `UPDATE` from that list. A caller who could
+  rewrite `auth_user_id` would point their profile at another person's `auth.users` row
+  and inherit their memberships, tenancies and tickets; `0002`'s `profiles_update_self`
+  pins both columns in its `with check`, and this is the other half of the same guard.
 
 **`ctx.serviceRole` is opt-in, not ambient.** `with-handler.ts` has no import path to a
-privileged client. `api/server-only/privileged-handler.ts` injects one, and the
-`**/server-only/**` ESLint rule means only server-side code can import it.
+privileged client. `api/server-only/privileged-handler.ts` injects one. Ratified as §5.2
+amendment A14.
+
+**The three privileged modules are guarded three ways.** `import 'server-only'` makes a
+client import a _build_ failure; the `**/server-only/**` ESLint rule makes it a lint
+failure; `assertServerRuntime` makes it a runtime failure. Keep all three — the build
+guard is the only one that fires before a bundle ships, and the lint rule is the only one
+that fires in an editor. The modules are `server-only/secrets.ts`,
+`supabase/server-only/service-role.ts` and `api/server-only/privileged-handler.ts`.
 
 **Audit rows go through the `log_audit` RPC, as the caller.** `audit_logs` has writes
 revoked from `authenticated`, and the security-definer function attributes the row to

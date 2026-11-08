@@ -30,6 +30,16 @@
  *    the policies say.
  */
 
+/**
+ * Build-time guard. The `server-only` package resolves to a module that throws under any
+ * condition but React's `react-server`, so importing this file from a client component is
+ * a BUILD failure — not a lint error, and not a runtime assertion that fires after the
+ * bundle has already shipped. The ESLint `server-only` path rule is kept as well, and the
+ * service-role client this module injects carries its own runtime assertion: three
+ * independent guards, each catching what the others cannot.
+ */
+import 'server-only';
+
 import {
   createApiHandler,
   type ApiHandler,
