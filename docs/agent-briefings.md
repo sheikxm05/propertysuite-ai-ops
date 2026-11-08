@@ -691,6 +691,12 @@ TASKS:
   8. Remediate every finding. Use 0004_security_remediation.sql for database-level
      fixes — never edit 0002 or 0003. Re-run every suite afterwards.
   9. Record any finding you consciously accept, with explicit rationale.
+  10. CARRIED-FORWARD GAP from Wave 0 (see parallel-execution-plan.md §5.9): add a
+      `check (category in (...))` constraint on `maintenance_tickets.category` in
+      `0004_security_remediation.sql`. The column is `text`, so today a direct
+      database write could set an arbitrary category that no application path would
+      ever produce. Use the exact list in `packages/shared/constants/categories.ts`.
+      Do the same review for the other `check (... in (...))` lists in 0001.
 
 EXIT GATE: every checklist line has recorded evidence; all adversarial passes clean;
 every suite green after remediation.
