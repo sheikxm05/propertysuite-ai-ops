@@ -59,8 +59,24 @@
 --
 -- Idempotency: every statement is `if not exists` / `or replace` /
 -- `drop ... if exists` guarded, so the file applies to a fresh database and is a
--- no-op on re-run. This was verified by inspection only — Docker was unavailable
--- in this lane, so the migration has NOT been executed against a live Postgres.
+-- no-op on re-run. Confirmed on a live Supabase Postgres 17: applied clean to a
+-- pristine database and re-applied idempotently.
+--
+-- EXECUTION FOUND ONE DEFECT THAT STATIC REVIEW DID NOT, worth recording because
+-- the shape generalises. An inline `exists (select ... from <other table>)` in a
+-- policy body is subject to THAT table's RLS, so two tables whose policies read
+-- each other form a cycle and Postgres raises
+-- "infinite recursion detected in policy for relation ...". Here
+-- maintenance_tickets_insert_tenant inline-read property_units, whose
+-- property_units_select_provider reads maintenance_tickets back, and every
+-- authenticated ticket INSERT failed. A bare SELECT on either table does not
+-- close the cycle, so a read-only smoke test misses it entirely.
+--
+-- The rule now applied throughout: a policy may inline-read another table only
+-- where the reference graph stays acyclic. Where it would not, the read goes
+-- behind a `security definer` helper, which does not re-enter RLS. After the fix
+-- no policy on `maintenance_tickets` inline-reads any table, making it a sink,
+-- and the remaining 11 inline references form a DAG.
 --
 -- Every helper call inside a policy body is wrapped as `(select helper(...))` so
 -- the planner evaluates it as a cached sub-plan per statement rather than per row.
@@ -287,6 +303,53 @@ as $$
   )
 $$;
 
+-- Does `unit_id` exist inside `property_id` inside `org`?
+--
+-- WHY THIS IS A FUNCTION AND NOT AN INLINE EXISTS. This check began life as an
+-- inline `exists (select 1 from public.property_units u ...)` inside
+-- maintenance_tickets_insert_tenant, and that caused
+-- "infinite recursion detected in policy for relation maintenance_tickets" on
+-- EVERY authenticated ticket INSERT:
+--
+--   maintenance_tickets_insert_tenant (with check)
+--     -> inline exists on property_units
+--        -> property_units RLS applies to that subquery
+--           -> property_units_select_provider (using)
+--              -> exists on maintenance_tickets
+--                 -> re-enters maintenance_tickets policy evaluation -> cycle
+--
+-- A bare SELECT on either table never closes the cycle, which is why only the
+-- INSERT path failed. Moving the read behind a security definer boundary breaks
+-- it: the function's read of property_units runs as the function owner and does
+-- not re-enter RLS. Nothing is lost by doing so, because this predicate is
+-- STRUCTURAL INTEGRITY — "the unit must belong to the stated property" — and not
+-- an authorization decision. The authorization decision on the same statement is
+-- `can_access_unit`, which stays exactly as it is.
+--
+-- WHY $1/$2/$3 AND NOT THE PARAMETER NAMES. `public.property_units` has a column
+-- literally named `property_id`. In a SQL-language function a column name takes
+-- precedence over a same-named parameter, so writing `u.property_id = property_id`
+-- would silently compare the column to ITSELF — always true — and the integrity
+-- check would be a no-op that looked correct in review. Positional parameters
+-- cannot be captured by a column name, so they are used deliberately here.
+-- (The other helpers reference parameters by name safely: no table they touch has
+-- a column named `org`, `unit_id` or `property_id`.)
+create or replace function public.unit_belongs_to_property(org uuid, unit_id uuid, property_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $ubp$
+  select exists (
+    select 1
+    from public.property_units u
+    where u.organization_id = $1
+      and u.id            = $2
+      and u.property_id   = $3
+  )
+$ubp$;
+
 -- Policy bodies are evaluated with the caller's privileges, so the caller needs
 -- EXECUTE. Granted explicitly rather than relying on the default PUBLIC grant.
 grant execute on function public.has_org_role(uuid, public.member_role[]) to authenticated, service_role;
@@ -295,6 +358,7 @@ grant execute on function public.current_tenant_id(uuid)                  to aut
 grant execute on function public.current_provider_id(uuid)                to authenticated, service_role;
 grant execute on function public.owns_property(uuid, uuid)                to authenticated, service_role;
 grant execute on function public.can_access_unit(uuid, uuid)              to authenticated, service_role;
+grant execute on function public.unit_belongs_to_property(uuid, uuid, uuid) to authenticated, service_role;
 
 
 -- -----------------------------------------------------------------------------
@@ -833,13 +897,7 @@ with check (
   and (select public.can_access_unit(organization_id, property_unit_id))
   and status = 'open'::public.ticket_status
   and assigned_provider_id is null
-  and exists (
-    select 1
-    from public.property_units u
-    where u.organization_id = maintenance_tickets.organization_id
-      and u.id = maintenance_tickets.property_unit_id
-      and u.property_id = maintenance_tickets.property_id
-  )
+  and (select public.unit_belongs_to_property(organization_id, property_unit_id, property_id))
 );
 
 -- AC6. Staff own triage, priority and assignment. `with check` keeps the row in
