@@ -1,0 +1,40 @@
+# Secrets — never commit. .env.local is where every real credential lives.
+.env.local
+.env*.local
+.env
+!.env.example
+
+# Dependencies and build output
+node_modules/
+.next/
+out/
+build/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+
+# Test and coverage artifacts
+coverage/
+playwright-report/
+test-results/
+.vitest/
+
+# Supabase local stack
+supabase/.branches/
+supabase/.temp/
+.supabase/
+
+# Editor and OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-error.log*
+
+# Project blueprint archive — superseded by docs/
+propertysuite-ai-operations-blueprint.zip

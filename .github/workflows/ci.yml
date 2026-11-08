@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  # Cheapest gate first: if the ownership map is broken, nothing else matters because
+  # two lanes are writing the same file.
+  lane-ownership:
+    name: Lane ownership
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # No dependencies required — the validator is intentionally dependency-free.
+      - name: Map is collision-free
+        run: node scripts/check-lane-ownership.mjs --overlaps
+
+      - name: Branch stays inside its lane
+        if: github.event_name == 'pull_request'
+        run: |
+          lane="$(echo "${{ github.head_ref }}" | sed -n 's#^lane/\(.*\)$#\1#p')"
+          if [ -z "$lane" ]; then
+            echo "Not a lane/* branch — skipping per-lane check."
+            exit 0
+          fi
+          echo "Checking lane $lane against ${{ github.base_ref }}"
+          node scripts/check-lane-ownership.mjs --lane "$lane" --base "origin/${{ github.base_ref }}" --orphans
+
+  static:
+    name: Typecheck, lint, format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run format:check
+
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  # The project's central claim: organization A cannot reach organization B's data.
+  # Runs against a real Postgres with RLS active and real authenticated JWTs — never
+  # mocks, and never the service-role client for assertions.
+  rls:
+    name: RLS isolation suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+
+      - name: Start local Supabase stack
+        run: npx supabase start
+
+      - name: Apply migrations
+        run: npx supabase db reset --no-seed
+
+      - name: Isolation suite
+        run: npm run test:rls
+
+  secrets:
+    name: No secret in client bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          # Deliberately fake but realistically shaped, so the scan has something to
+          # match. A real secret must never enter CI for this job.
+          NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-anon-key-placeholder-value
+          SUPABASE_SERVICE_ROLE_KEY: ci-service-role-placeholder-value
+          AI_PROVIDER: anthropic
+          AI_MODEL: claude-sonnet-5
+          ANTHROPIC_API_KEY: sk-ant-ci-placeholder-value-0000
+          APP_BASE_URL: http://localhost:3000
+
+      - name: Scan client bundle
+        run: npm run bundle:scan
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ci-service-role-placeholder-value
+          ANTHROPIC_API_KEY: sk-ant-ci-placeholder-value-0000
