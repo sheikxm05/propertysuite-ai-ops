@@ -295,9 +295,10 @@ export const POLICY_MATRIX: Readonly<Record<TenantScopedTable, TableSpec>> = Obj
       delete: false,
       policies: ['documents_select_provider_assigned', 'documents_insert_provider_assigned'],
       note:
-        'Amendment A7: completion evidence on an assigned ticket. Depends on documents.ticket_id. ' +
-        'Not present in 0002/0003 at the time this suite was written — the assertion is expected ' +
-        'to fail until A7 is implemented, and must not be softened to match the SQL.',
+        'Amendment A7: completion evidence on an assigned ticket. Depends on ' +
+        'documents.ticket_id, which 0003 adds before calling 0002`s ' +
+        'ensure_document_provider_policies(). The suite probes for the column and says so ' +
+        'plainly if it is missing, rather than reporting an opaque empty result.',
     },
   },
 

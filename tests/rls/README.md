@@ -111,14 +111,25 @@ Every row id is derived from a stable key, so seeding is an upsert and re-runnin
 suite without a database reset is idempotent. Anything that genuinely mutates state uses
 a throwaway ticket from `tests/_harness/scratch.ts` instead of the shared fixture.
 
-## Known divergence between the spec and the migrations
+## Spec amendments this suite tracks
 
-`documents.service_provider` SELECT and INSERT (amendment A7 in
-`parallel-execution-plan.md` §5.8, and the current §4 matrix wording "CR assigned-ticket
-evidence only") depend on `documents.ticket_id`, which neither `0002` nor `0003` adds.
-Migration `0002` was written against the earlier matrix, which read "provider —", and
-raised the gap as a planning defect.
+The §4 matrix has moved since it was first frozen; the suite asserts the current text
+plus the `parallel-execution-plan.md` §5.8 amendment log, not the original:
 
-The document is the contract, so `role-scoping.test.ts` asserts the amended matrix and
-**fails** until A7 is implemented. The first failing assertion names A7 explicitly rather
-than reporting an opaque empty result. Do not soften it to match the SQL.
+- **A5** — bucket id `documents`. `storage.test.ts` uses it directly rather than guessing.
+- **A6** — `profiles` gains self-scoped UPDATE; creation moved to an `auth.users` trigger,
+  so no role has a client INSERT on `profiles`.
+- **A7** — `service_provider` gains `documents` SELECT and INSERT scoped to an assigned
+  ticket. This depends on `documents.ticket_id`: `0003` adds the column and then calls
+  `ensure_document_provider_policies()`, which `0002` defines. The harness probes for the
+  column, and `role-scoping.test.ts` fails with that chain named if it is absent — so a
+  half-applied migration cannot look like an RLS finding.
+- **A8** — `organization_admin` gains INSERT on `maintenance_activities`.
+- **A9** — the rework edge `awaiting_approval -> in_progress` (staff only) and the cancel
+  rules. Picked up automatically: `state-machine.test.ts` derives its legal and illegal
+  edge sets from `ALLOWED_TRANSITIONS` and `TRANSITION_ROLES` in `packages/shared`.
+
+Two deliberate non-changes the suite must NOT assert against: there is no
+`force row level security` anywhere (`current_profile_id()` reads `public.profiles`, so
+forcing it would make that security-definer helper recurse through the policy it is
+evaluating), and `organizations` is read-only for every role including the admin.

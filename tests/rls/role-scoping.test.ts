@@ -379,11 +379,12 @@ describe('provider completion evidence (amendment A7)', () => {
   it('documents.ticket_id exists, so evidence can be scoped to an assigned ticket', () => {
     expect(
       world.fixture.capabilities.documentsHasTicketId,
-      'documents.ticket_id is absent. Amendment A7 (§5.8) grants a service_provider ' +
-        'INSERT and SELECT on documents scoped to an assigned ticket, and the §4 matrix ' +
-        'now reads "CR assigned-ticket evidence only" — but neither 0002 nor 0003 adds ' +
-        'the column or the policies. The document is the contract, so this assertion ' +
-        'stays as written until the migration implements A7.',
+      'documents.ticket_id is absent. Amendment A7 (§5.8) scopes a service_provider`s ' +
+        'documents INSERT and SELECT to an assigned ticket, and 0002 creates those two ' +
+        'policies only once the column exists — 0003 adds it and then calls ' +
+        'ensure_document_provider_policies(). Without the column there is no evidence ' +
+        'path at all, so the two assertions below would fail for a reason that has ' +
+        'nothing to do with RLS.',
     ).toBe(true);
   });
 
