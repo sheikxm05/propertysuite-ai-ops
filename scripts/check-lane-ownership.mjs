@@ -418,13 +418,9 @@ function main() {
       }
     }
     if (sharedTree && orphans.length) {
-      console.error(
-        `\n${C.red}✗ ${orphans.length} changed path(s) owned by NO lane:${C.off}`,
-      );
+      console.error(`\n${C.red}✗ ${orphans.length} changed path(s) owned by NO lane:${C.off}`);
       for (const f of orphans) console.error(`    ${f}`);
-      console.error(
-        `\nAn unowned path is a planning defect: report it rather than adopting it.\n`,
-      );
+      console.error(`\nAn unowned path is a planning defect: report it rather than adopting it.\n`);
       process.exit(1);
     }
     if (showOrphans && orphans.length) {

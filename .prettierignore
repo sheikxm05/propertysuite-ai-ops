@@ -1,0 +1,12 @@
+# Build output and vendored content
+.next/
+node_modules/
+coverage/
+playwright-report/
+test-results/
+package-lock.json
+
+# Owned by lane w2-l6, which rewrites it in Wave 2 and will format it then. Excluded so
+# CI's format:check does not fail for the whole of Waves 0 and 1 on a file no active
+# lane is permitted to touch. Remove this entry when w2-l6 lands.
+README.md

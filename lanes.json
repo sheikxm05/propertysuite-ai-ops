@@ -21,7 +21,9 @@
       "docs/parallel-execution-plan.md",
       "docs/implementation-plan.md",
       "docs/implementation-plan.blueprint.md",
-      "docs/ai-prompts/**"
+      "docs/ai-prompts/**",
+      "supabase/config.toml",
+      "supabase/.gitignore"
     ]
   },
   "waves": [
@@ -43,6 +45,7 @@
             "postcss.config.mjs",
             "eslint.config.mjs",
             ".prettierrc",
+            ".prettierignore",
             ".gitignore",
             ".env.example",
             ".github/workflows/ci.yml",
