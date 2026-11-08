@@ -1,35 +1,28 @@
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-
 /**
- * Entry route.
+ * Entry route. Lane w1-l1 — this file replaces the `SEAM FOR LANE w1-l1` block w0-l1
+ * left here.
  *
- * ============================ SEAM FOR LANE w1-l1 ============================
- * w1-l1 replaces this body with a session check and a redirect:
- *   const session = await getSession();
- *   redirect(session ? '/dashboard' : '/sign-in');
- * Until auth exists (Wave 1), this is a static landing page so the app builds and runs.
- * =============================================================================
+ * It resolves nothing and renders nothing: a verified session goes to `/dashboard`, and
+ * everyone else to `/sign-in`. There is no landing page in this build, and `/` is not in
+ * `middleware.ts`'s matcher, so this is the only gate on it.
+ *
+ * The session is read through `getSession()`, which is `supabase.auth.getUser()`
+ * underneath — the JWT is verified against the auth server rather than decoded from a
+ * cookie. The difference matters even for a redirect: trusting a cookie here would send
+ * a forged session to the dashboard, where the real check would then fail in a less
+ * legible way.
+ *
+ * Membership is deliberately *not* resolved here. A user who is authenticated but
+ * belongs to nothing yet is in a legitimate state — signed up, invitation not yet
+ * redeemed — and `/dashboard` is where that state is handled. Redirecting them somewhere
+ * else from here would duplicate that decision in two files.
  */
-export default function Home() {
-  return (
-    <main className="flex min-h-screen items-center justify-center p-6">
-      <Card className="w-full max-w-lg">
-        <CardHeader>
-          <CardTitle>PropertySuite AI Ops</CardTitle>
-          <CardDescription>
-            Multi-tenant property operations with AI-assisted maintenance intake and human-verified
-            document extraction.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {/* No link to /dashboard yet: that route is created by lane w1-l1, which also
-              replaces this page with a session-aware redirect. Linking to it now would
-              be a link to a 404. */}
-          <p className="text-sm text-muted-foreground">
-            Scaffold is in place. Sign-in and the authenticated dashboard arrive with lane w1-l1.
-          </p>
-        </CardContent>
-      </Card>
-    </main>
-  );
+
+import { redirect } from 'next/navigation';
+
+import { getSession } from '@/lib/auth/session';
+
+export default async function Home() {
+  const session = await getSession();
+  redirect(session ? '/dashboard' : '/sign-in');
 }
