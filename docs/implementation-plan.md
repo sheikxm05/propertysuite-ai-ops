@@ -98,22 +98,22 @@ caches them per statement rather than evaluating per row.
 `R` read, `W` write, `C` create, `U` update, `A` archive. No `DELETE` is granted on any
 table. Onboarding and invitation writes go through RPCs, not direct policies.
 
-| Table                              | organization_admin | property_manager  | property_owner    | tenant                     | service_provider                   |
-| ---------------------------------- | ------------------ | ----------------- | ----------------- | -------------------------- | ---------------------------------- |
-| `organizations`                    | R own              | R own             | R own             | R own                      | R own                              |
-| `profiles`                         | R self + same-org  | R self + same-org | R self + same-org | R self only                | R self only                        |
-| `organization_members`             | RW                 | R                 | R                 | R self                     | R self                             |
-| `properties`                       | RWA                | RWA               | R owned           | R via tenancy              | R via assigned ticket              |
-| `property_units`                   | RWA                | RWA               | R owned           | R leased                   | R via assigned ticket              |
-| `tenants`                          | RW                 | RW                | —                 | R self only                | R name only, via assignment        |
-| `tenancies`                        | RW                 | RW                | R owned           | R own                      | —                                  |
-| `service_providers`                | RW                 | RW                | —                 | —                          | R self                             |
-| `maintenance_tickets`              | RW                 | RW                | R owned           | CR own, confirm completion | R + U assigned only, status subset |
-| `maintenance_activities`           | R                  | CR                | R owned           | CR own tickets             | CR assigned tickets                |
-| `documents`                        | RW                 | RW                | R owned           | R own tenancy              | —                                  |
-| `ai_conversations` / `ai_messages` | R                  | R                 | —                 | CR own                     | —                                  |
-| `notifications`                    | R own              | R own             | R own             | R own                      | R own                              |
-| `audit_logs`                       | R                  | —                 | —                 | —                          | —                                  |
+| Table                              | organization_admin        | property_manager          | property_owner            | tenant                     | service_provider                   |
+| ---------------------------------- | ------------------------- | ------------------------- | ------------------------- | -------------------------- | ---------------------------------- |
+| `organizations`                    | R own                     | R own                     | R own                     | R own                      | R own                              |
+| `profiles`                         | R self + same-org, U self | R self + same-org, U self | R self + same-org, U self | R self only, U self        | R self only, U self                |
+| `organization_members`             | RW                        | R                         | R                         | R self                     | R self                             |
+| `properties`                       | RWA                       | RWA                       | R owned                   | R via tenancy              | R via assigned ticket              |
+| `property_units`                   | RWA                       | RWA                       | R owned                   | R leased                   | R via assigned ticket              |
+| `tenants`                          | RW                        | RW                        | —                         | R self only                | R name only, via assignment        |
+| `tenancies`                        | RW                        | RW                        | R owned                   | R own                      | —                                  |
+| `service_providers`                | RW                        | RW                        | —                         | —                          | R self                             |
+| `maintenance_tickets`              | RW                        | RW                        | R owned                   | CR own, confirm completion | R + U assigned only, status subset |
+| `maintenance_activities`           | CR                        | CR                        | R owned                   | CR own tickets             | CR assigned tickets                |
+| `documents`                        | RW                        | RW                        | R owned                   | R own tenancy              | CR assigned-ticket evidence only   |
+| `ai_conversations` / `ai_messages` | R                         | R                         | —                         | CR own                     | —                                  |
+| `notifications`                    | R own                     | R own                     | R own                     | R own                      | R own                              |
+| `audit_logs`                       | R                         | —                         | —                         | —                          | —                                  |
 
 ### Storage
 
@@ -123,11 +123,24 @@ membership. Signed URLs expire in 60 seconds. No public bucket exists.
 
 ### Ticket state machine
 
-`open → assigned → in_progress → awaiting_approval → completed`, with `cancelled`
-reachable from any non-terminal state. Enforced in the domain service **and** by a
-database trigger. Illegal transitions return `409`. A service provider may only drive
-`assigned → in_progress → awaiting_approval`; only a manager or the reporting tenant
-may close to `completed`.
+`open → assigned → in_progress → awaiting_approval → completed`, plus the rework edge
+`awaiting_approval → in_progress`, and `cancelled` from any non-terminal state. Enforced
+in the domain service **and** by a database trigger. An illegal edge returns `409`; a
+legal edge attempted by the wrong role returns `403`.
+
+- A service provider may only drive `assigned → in_progress → awaiting_approval`, and
+  only on a ticket assigned to them.
+- Only a manager, an organization admin, or the reporting tenant may close to
+  `completed`.
+- Rework (`awaiting_approval → in_progress`) is organization admin or manager only.
+  Without it, a manager rejecting completion evidence could only cancel, discarding
+  real work.
+- Cancel: admin or manager from any non-terminal state; the reporting tenant only while
+  the ticket is still `open`; never a service provider or a property owner.
+- A ticket must be inserted as `open`, and its `organization_id` is immutable, so a
+  dual-membership actor cannot walk a ticket across the isolation boundary.
+
+Amendments to this section are logged in `parallel-execution-plan.md` §5.8.
 
 ---
 
