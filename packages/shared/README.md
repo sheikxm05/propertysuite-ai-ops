@@ -39,6 +39,19 @@ if (!canTransition(from, to, role)) return 403; // FORBIDDEN — not for this ro
 tenant", "is this the assigned provider" — is a separate check the caller must also
 make; the function is pure and sees no row. RLS enforces it independently.
 
+Two sibling graphs follow the same naming, in `constants/statuses.ts`:
+`ALLOWED_TENANCY_TRANSITIONS` / `canTransitionTenancy`, and
+`ALLOWED_UNIT_TRANSITIONS` / `canTransitionUnit`. Neither has a database trigger
+behind it — both are enforced server-side.
+
+For units the shared rule is not really the edge set but
+`reconcileUnitStatus(hasActiveTenancy, current)`: "what should this unit's status be,
+given its tenancy state". Properties and tenancies are separate lanes that both write
+`property_units.status`, so they must get the same answer. `inactive` is sticky — a
+staff decision that a unit is not lettable is never cleared by an automated reconcile,
+and the result is always either the current status or a legal transition from it, so
+callers can apply it without a second check.
+
 **2. The model suggests; policy decides.**
 `resolvePriority(classification, context)` decides a ticket's priority.
 `suggested_priority` is one bounded input: a suggestion alone can never produce

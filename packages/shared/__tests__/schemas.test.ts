@@ -452,6 +452,54 @@ describe('CompleteTicketSchema', () => {
     expect(() => CompleteTicketSchema.parse({ ...valid, resolution_summary: 'done' })).toThrow();
   });
 
+  /**
+   * The summary's only durable home is the append-only activity timeline —
+   * `maintenance_tickets` has no `resolution_summary` column — so its bound
+   * must equal `CreateActivitySchema.description`'s. A looser bound here would
+   * make a longer summary valid input with nowhere to store it, and `0003`
+   * rejects UPDATE on `maintenance_activities` even for the table owner, so
+   * truncating on write is not an available fallback.
+   *
+   * Asserted behaviourally rather than by reading the two limits, so the guard
+   * holds even if the helper changes.
+   */
+  it('bounds resolution_summary to exactly what the activity timeline can store', () => {
+    const atLimit = 'x'.repeat(1000);
+    const overLimit = 'x'.repeat(1001);
+
+    expect(CompleteTicketSchema.parse({ ...valid, resolution_summary: atLimit })).toBeTruthy();
+    expect(() => CompleteTicketSchema.parse({ ...valid, resolution_summary: overLimit })).toThrow();
+
+    // The same two strings must behave identically on the column that stores it.
+    expect(
+      CreateActivitySchema.parse({
+        activity_type: 'completion_confirmed',
+        description: atLimit,
+      }),
+    ).toBeTruthy();
+    expect(() =>
+      CreateActivitySchema.parse({
+        activity_type: 'completion_confirmed',
+        description: overLimit,
+      }),
+    ).toThrow();
+  });
+
+  it('accepts no summary length that the activity row would reject', () => {
+    for (const length of [10, 500, 999, 1000, 1001, 1500, 2000]) {
+      const text = 'x'.repeat(length);
+      const summaryOk = CompleteTicketSchema.safeParse({
+        ...valid,
+        resolution_summary: text,
+      }).success;
+      const storageOk = CreateActivitySchema.safeParse({
+        activity_type: 'completion_confirmed',
+        description: text,
+      }).success;
+      expect(summaryOk).toBe(storageOk);
+    }
+  });
+
   it('bounds the evidence list', () => {
     expect(() =>
       CompleteTicketSchema.parse({ ...valid, evidence_document_ids: Array(11).fill(UUID) }),

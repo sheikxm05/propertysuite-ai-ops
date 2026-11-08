@@ -141,7 +141,20 @@ export type AssignTicketInput = z.infer<typeof AssignTicketSchema>;
  */
 export const CompleteTicketSchema = z
   .object({
-    resolution_summary: boundedText(10, 2000),
+    /**
+     * Bounded to 1000 to match `CreateActivitySchema.description`, which is the
+     * only durable home this text has: `maintenance_tickets` has no
+     * `resolution_summary` column, so the summary is persisted as the
+     * `completion_confirmed` row on the append-only activity timeline.
+     *
+     * The bounds must be equal. A longer limit here would make a 1001-character
+     * summary valid input with nowhere to store it — and truncating on write is
+     * not available as a fallback, because `0003` rejects UPDATE on
+     * `maintenance_activities` even for the table owner, so a silently
+     * shortened record could never be corrected. Asserted in
+     * `__tests__/schemas.test.ts`.
+     */
+    resolution_summary: boundedText(10, 1000),
     /** Identifiers of already-uploaded evidence documents. Never file content. */
     evidence_document_ids: z.array(UuidSchema).max(10).optional(),
     confirmed: ConfirmationSchema,

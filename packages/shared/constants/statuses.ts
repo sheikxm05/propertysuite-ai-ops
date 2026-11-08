@@ -140,3 +140,69 @@ export const ALLOWED_TENANCY_TRANSITIONS: Readonly<
 export function canTransitionTenancy(from: TenancyStatus, to: TenancyStatus): boolean {
   return ALLOWED_TENANCY_TRANSITIONS[from].includes(to);
 }
+
+/**
+ * Application-level unit status graph over the `property_units.status` CHECK
+ * constraint in `0001`.
+ *
+ * Lives here, beside the tenancy graph, because two Wave 1 lanes need the same
+ * rule and neither can import from the other: w1-l2 owns unit status
+ * transitions, and w1-l3 must keep occupancy consistent with the active
+ * tenancy, which means it writes `property_units.status` too. Implemented once
+ * here, the two cannot drift.
+ *
+ * Like the tenancy graph and unlike the ticket graph, there is no database
+ * trigger behind this — it is enforced server-side. There is no terminal state
+ * and no deletion: `inactive` is the archive equivalent for a unit.
+ *
+ *   available -> occupied      a tenancy begins
+ *   available -> inactive      taken out of service (the archive edge)
+ *   occupied  -> available     the tenancy ends and the unit is released
+ *   inactive  -> available     returned to service
+ *
+ * Two edges are deliberately absent, and both preserve the invariant
+ * "`inactive` implies no active tenancy":
+ *
+ *  - `occupied -> inactive`. `inactive` is this table's archive state, and
+ *    archiving a unit somebody is living in would strand a live tenancy behind
+ *    a status that `reconcileUnitStatus` will never correct, because `inactive`
+ *    is sticky. Decommissioning an occupied unit is two deliberate steps in
+ *    order: end the tenancy, then archive.
+ *  - `inactive -> occupied`, for the mirror reason. A unit must be returned to
+ *    service before it can be let, so reactivation is always a visible,
+ *    separate decision rather than a side effect of creating a tenancy.
+ */
+export const ALLOWED_UNIT_TRANSITIONS: Readonly<Record<UnitStatus, readonly UnitStatus[]>> =
+  Object.freeze({
+    available: Object.freeze(['occupied', 'inactive'] as const),
+    occupied: Object.freeze(['available'] as const),
+    inactive: Object.freeze(['available'] as const),
+  });
+
+export function canTransitionUnit(from: UnitStatus, to: UnitStatus): boolean {
+  return ALLOWED_UNIT_TRANSITIONS[from].includes(to);
+}
+
+/**
+ * What should a unit's status be, given whether it currently has an active
+ * tenancy?
+ *
+ * This — not the edge set — is the rule both lanes actually need to share: w1-l2
+ * reaches it from the unit side and w1-l3 from the tenancy side, and they must
+ * agree or a unit ends up `available` while someone is living in it.
+ *
+ * `inactive` is sticky. It is a deliberate staff decision that a unit is not
+ * lettable, so an automated reconcile never clears it — otherwise activating a
+ * tenancy on a decommissioned unit would quietly put it back into service, and
+ * the one status a human explicitly set would be the one the system overrode.
+ * Returning a unit to service is always an explicit `inactive -> available`
+ * transition.
+ *
+ * Pure, total and idempotent: `reconcile(x, reconcile(x, s)) === reconcile(x, s)`.
+ * The result is always either `current` or a legal transition from it, so a
+ * caller can apply it without separately checking `canTransitionUnit`.
+ */
+export function reconcileUnitStatus(hasActiveTenancy: boolean, current: UnitStatus): UnitStatus {
+  if (current === 'inactive') return 'inactive';
+  return hasActiveTenancy ? 'occupied' : 'available';
+}

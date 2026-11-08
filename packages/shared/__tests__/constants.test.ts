@@ -15,6 +15,7 @@ import { MEMBER_ROLES, STAFF_ROLES, isMemberRole, isStaffRole } from '../constan
 import {
   ACTIVITY_TYPES,
   ALLOWED_TENANCY_TRANSITIONS,
+  ALLOWED_UNIT_TRANSITIONS,
   DEAD_LETTER_JOB_STATUS,
   INVITATION_STATUSES,
   JOB_STATUSES,
@@ -26,7 +27,10 @@ import {
   TICKET_SOURCES,
   UNIT_STATUSES,
   VERIFICATION_STATUSES,
+  type UnitStatus,
   canTransitionTenancy,
+  canTransitionUnit,
+  reconcileUnitStatus,
 } from '../constants/statuses';
 import { TICKET_PRIORITIES, TICKET_STATUSES } from '../constants/ticket-status';
 
@@ -289,5 +293,159 @@ describe('tenancy lifecycle', () => {
 
   it('has an entry for every status', () => {
     expect(Object.keys(ALLOWED_TENANCY_TRANSITIONS).sort()).toEqual([...TENANCY_STATUSES].sort());
+  });
+});
+
+describe('unit status graph', () => {
+  /**
+   * The expected edge set, transcribed from the rule rather than read back out
+   * of `ALLOWED_UNIT_TRANSITIONS`. All 3 x 3 = 9 ordered pairs are checked, so
+   * this is exhaustive rather than illustrative.
+   *
+   * This graph is shared by w1-l2 (unit status is its task) and w1-l3 (keeping
+   * occupancy consistent with the active tenancy means it writes unit status
+   * too). Neither lane can import from the other, so before this landed the
+   * rule existed twice and agreed only by luck.
+   */
+  const EXPECTED_ALLOWED: ReadonlyArray<readonly [UnitStatus, UnitStatus]> = [
+    ['available', 'occupied'],
+    ['available', 'inactive'],
+    ['occupied', 'available'],
+    ['inactive', 'available'],
+  ];
+
+  const expectedKeys = new Set(EXPECTED_ALLOWED.map(([from, to]) => `${from}|${to}`));
+
+  it('has an entry for every status', () => {
+    expect(Object.keys(ALLOWED_UNIT_TRANSITIONS).sort()).toEqual([...UNIT_STATUSES].sort());
+  });
+
+  it('agrees with the rule on all 9 ordered pairs', () => {
+    const disagreements: string[] = [];
+    for (const from of UNIT_STATUSES) {
+      for (const to of UNIT_STATUSES) {
+        const expected = expectedKeys.has(`${from}|${to}`);
+        const actual = canTransitionUnit(from, to);
+        if (actual !== expected) {
+          disagreements.push(`${from}->${to}: expected ${expected}, got ${actual}`);
+        }
+      }
+    }
+    expect(disagreements).toEqual([]);
+    expect(UNIT_STATUSES.length * UNIT_STATUSES.length).toBe(9);
+  });
+
+  it('lets a unit be let and released', () => {
+    expect(canTransitionUnit('available', 'occupied')).toBe(true);
+    expect(canTransitionUnit('occupied', 'available')).toBe(true);
+  });
+
+  it('archives only a unit that nobody is living in', () => {
+    expect(canTransitionUnit('available', 'inactive')).toBe(true);
+    expect(canTransitionUnit('occupied', 'inactive')).toBe(false);
+  });
+
+  /**
+   * The invariant the two absent edges exist to protect. `inactive` is sticky,
+   * so a unit archived while occupied could never be reconciled back into
+   * agreement with its tenancy — the status would be permanently wrong.
+   */
+  it('keeps inactive unreachable from occupied in both directions', () => {
+    expect(canTransitionUnit('occupied', 'inactive')).toBe(false);
+    expect(canTransitionUnit('inactive', 'occupied')).toBe(false);
+  });
+
+  it('requires two deliberate steps to decommission an occupied unit', () => {
+    // End the tenancy first, then archive. Never one hop.
+    expect(canTransitionUnit('occupied', 'available')).toBe(true);
+    expect(canTransitionUnit('available', 'inactive')).toBe(true);
+  });
+
+  it('requires an inactive unit to be returned to service before it can be let', () => {
+    expect(canTransitionUnit('inactive', 'available')).toBe(true);
+    expect(canTransitionUnit('inactive', 'occupied')).toBe(false);
+  });
+
+  it('never allows a self-transition', () => {
+    for (const status of UNIT_STATUSES) {
+      expect(canTransitionUnit(status, status)).toBe(false);
+    }
+  });
+
+  it('has no terminal state — a unit is never unreachable', () => {
+    for (const status of UNIT_STATUSES) {
+      expect(ALLOWED_UNIT_TRANSITIONS[status].length).toBeGreaterThan(0);
+    }
+  });
+
+  it('is frozen, so no caller can mutate the shared rule set at runtime', () => {
+    expect(Object.isFrozen(ALLOWED_UNIT_TRANSITIONS)).toBe(true);
+    expect(Object.isFrozen(ALLOWED_UNIT_TRANSITIONS.available)).toBe(true);
+  });
+});
+
+describe('reconcileUnitStatus', () => {
+  it('follows the tenancy for a live unit', () => {
+    expect(reconcileUnitStatus(true, 'available')).toBe('occupied');
+    expect(reconcileUnitStatus(false, 'occupied')).toBe('available');
+  });
+
+  it('is a no-op when the status already matches the tenancy', () => {
+    expect(reconcileUnitStatus(true, 'occupied')).toBe('occupied');
+    expect(reconcileUnitStatus(false, 'available')).toBe('available');
+  });
+
+  it('never clears inactive — a staff decision is not overridden automatically', () => {
+    expect(reconcileUnitStatus(true, 'inactive')).toBe('inactive');
+    expect(reconcileUnitStatus(false, 'inactive')).toBe('inactive');
+  });
+
+  it('covers all six input combinations', () => {
+    const results = UNIT_STATUSES.flatMap((current) =>
+      [true, false].map((hasActiveTenancy) => ({
+        current,
+        hasActiveTenancy,
+        result: reconcileUnitStatus(hasActiveTenancy, current),
+      })),
+    );
+    expect(results).toHaveLength(6);
+    for (const { result } of results) {
+      expect(UNIT_STATUSES).toContain(result);
+    }
+  });
+
+  it('is idempotent', () => {
+    for (const current of UNIT_STATUSES) {
+      for (const hasActiveTenancy of [true, false]) {
+        const once = reconcileUnitStatus(hasActiveTenancy, current);
+        const twice = reconcileUnitStatus(hasActiveTenancy, once);
+        expect(twice).toBe(once);
+      }
+    }
+  });
+
+  /**
+   * The property that makes the function safe to apply blindly: a caller can
+   * write the result without separately consulting `canTransitionUnit`, because
+   * the result is never an illegal move from where the unit already was.
+   */
+  it('only ever returns the current status or a legal transition from it', () => {
+    for (const current of UNIT_STATUSES) {
+      for (const hasActiveTenancy of [true, false]) {
+        const next = reconcileUnitStatus(hasActiveTenancy, current);
+        if (next !== current) {
+          expect(canTransitionUnit(current, next)).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('agrees with itself whichever lane asks — the whole point of it living here', () => {
+    // w1-l2 reaching it from the unit side and w1-l3 from the tenancy side must
+    // get the same answer for the same facts.
+    const fromUnitSide = reconcileUnitStatus(true, 'available');
+    const fromTenancySide = reconcileUnitStatus(true, 'available');
+    expect(fromUnitSide).toBe(fromTenancySide);
+    expect(fromUnitSide).toBe('occupied');
   });
 });
