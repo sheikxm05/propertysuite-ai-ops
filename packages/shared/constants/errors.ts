@@ -97,6 +97,51 @@ export const ApiErrorSchema: z.ZodType<ApiError> = z
   })
   .strict();
 
+/**
+ * Postgres SQLSTATE to error code, frozen by amendment A2.
+ *
+ * §5.2 froze the eight codes but never said how a database error reaches one.
+ * This is the mapping, as data, so that `lib/api/with-handler.ts` and the tests
+ * that assert on it cannot disagree.
+ *
+ * The important entry is `42501`: Postgres raises it for an RLS denial, so a
+ * cross-organization write surfaces as `403 FORBIDDEN` rather than as a
+ * `500 INTERNAL_ERROR`. A 500 there would be a security smell — it would mean
+ * the application could not tell "you may not" from "we broke".
+ *
+ * `P0001` is `raise exception` from our own triggers, which is how an illegal
+ * ticket transition arrives: a conflict with current state, hence 409. The
+ * transition trigger deliberately raises `42501` instead when the edge is legal
+ * but the role may not drive it, which lands on 403 — the same 409/403 split
+ * `isAllowedTransition` and `canTransition` make in application space.
+ */
+export const SQLSTATE_ERROR_CODES: Readonly<Record<string, ErrorCode>> = Object.freeze({
+  /** `raise exception` from a domain trigger — illegal state transition. */
+  P0001: 'CONFLICT',
+  /** Insufficient privilege, including every row-level security denial. */
+  '42501': 'FORBIDDEN',
+  /** Invalid authorization specification. */
+  '28000': 'UNAUTHENTICATED',
+  /** Invalid parameter value — e.g. a malformed uuid cast. */
+  '22023': 'VALIDATION_ERROR',
+  /** Unique violation, including an idempotency-key collision. */
+  '23505': 'CONFLICT',
+  /** Foreign key violation. */
+  '23503': 'UNPROCESSABLE',
+  /** Check constraint violation. */
+  '23514': 'UNPROCESSABLE',
+});
+
+/**
+ * Map a SQLSTATE to one of the eight codes. Anything unrecognised is
+ * `INTERNAL_ERROR` — failing closed, because an unmapped database error is by
+ * definition one we have not reasoned about.
+ */
+export function errorCodeForSqlState(sqlState: string | null | undefined): ErrorCode {
+  if (!sqlState) return 'INTERNAL_ERROR';
+  return SQLSTATE_ERROR_CODES[sqlState] ?? 'INTERNAL_ERROR';
+}
+
 export function isErrorCode(value: unknown): value is ErrorCode {
   return typeof value === 'string' && (ERROR_CODES as readonly string[]).includes(value);
 }

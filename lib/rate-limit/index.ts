@@ -117,7 +117,11 @@ export function consume(
  */
 export function defaultRuleFor(pathname: string, method: string): RateLimitRule {
   if (isAiPath(pathname)) {
-    return { key: 'ai', perMinute: RATE_LIMIT_DEFAULTS.ai.perMinute, burst: RATE_LIMIT_DEFAULTS.ai.burst };
+    return {
+      key: 'ai',
+      perMinute: RATE_LIMIT_DEFAULTS.ai.perMinute,
+      burst: RATE_LIMIT_DEFAULTS.ai.burst,
+    };
   }
   if (method === 'GET' || method === 'HEAD') {
     return {

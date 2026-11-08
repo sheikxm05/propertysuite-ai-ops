@@ -104,13 +104,21 @@ export const PROVIDER_TENANT_FIELDS: readonly string[] = ['id', 'organization_id
 /* ---------------------------------------------------------------- policies -- */
 
 /** A single cell of the §4 matrix. */
-type Rule = (membership: Membership, resource: ResourceRef, action: Action) => AuthorizationDecision;
+type Rule = (
+  membership: Membership,
+  resource: ResourceRef,
+  action: Action,
+) => AuthorizationDecision;
 
 /** Writes nobody has. Used for every `—` and every read-only row in the matrix. */
 const NONE: Rule = () => DENY('not_permitted_for_role');
 
 const readOnly =
-  (predicate: (m: Membership, r: ResourceRef) => boolean, reason: string, fields?: readonly string[]): Rule =>
+  (
+    predicate: (m: Membership, r: ResourceRef) => boolean,
+    reason: string,
+    fields?: readonly string[],
+  ): Rule =>
   (m, r, action) => {
     if (action !== 'read') return DENY('write_not_permitted_for_role');
     return predicate(m, r) ? ALLOW(reason, fields) : DENY(reason);
@@ -218,11 +226,7 @@ const POLICIES: Record<ResourceType, Record<MemberRole, Rule>> = {
     property_manager: staffWrite(false),
     property_owner: NONE,
     tenant: readOnly(isOwnTenant, 'self_tenant_only'),
-    service_provider: readOnly(
-      isOwnProvider,
-      'tenant_name_via_assignment',
-      PROVIDER_TENANT_FIELDS,
-    ),
+    service_provider: readOnly(isOwnProvider, 'tenant_name_via_assignment', PROVIDER_TENANT_FIELDS),
   },
 
   tenancy: {
@@ -334,10 +338,7 @@ const POLICIES: Record<ResourceType, Record<MemberRole, Rule>> = {
 };
 
 /** Create and read, never update, archive or delete. For immutable tables. */
-function appendOnly(
-  predicate: (m: Membership, r: ResourceRef) => boolean,
-  reason: string,
-): Rule {
+function appendOnly(predicate: (m: Membership, r: ResourceRef) => boolean, reason: string): Rule {
   return (m, r, action) => {
     if (action !== 'read' && action !== 'create') return DENY('append_only_resource');
     return predicate(m, r) ? ALLOW(reason) : DENY(reason);
@@ -369,10 +370,7 @@ export function authorize(
   if (membership.status !== 'active') return DENY('membership_not_active');
   if (membership.organization.status !== 'active') return DENY('organization_not_active');
 
-  if (
-    resource.organizationId != null &&
-    resource.organizationId !== membership.organization.id
-  ) {
+  if (resource.organizationId != null && resource.organizationId !== membership.organization.id) {
     return DENY('cross_organization');
   }
 

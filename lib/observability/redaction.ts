@@ -147,13 +147,18 @@ export function redactMetadata(input: unknown): Record<string, unknown> {
  * cover.
  */
 export function scrubText(text: string): string {
-  return text
-    .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]+)?/g, '[redacted-jwt]')
-    .replace(/\bsk-ant-[A-Za-z0-9_-]{8,}/g, '[redacted-key]')
-    .replace(/\b(?:sb|sbp|service_role)_[A-Za-z0-9_-]{8,}/g, '[redacted-key]')
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Bearer [redacted]')
-    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[redacted-email]')
-    .replace(/\b(?:\+971|00971|0)5\d[\s-]?\d{3}[\s-]?\d{4}\b/g, '[redacted-phone]');
+  return (
+    text
+      .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]+)?/g, '[redacted-jwt]')
+      .replace(/\bsk-ant-[A-Za-z0-9_-]{8,}/g, '[redacted-key]')
+      .replace(/\b(?:sb|sbp|service_role)_[A-Za-z0-9_-]{8,}/g, '[redacted-key]')
+      .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Bearer [redacted]')
+      .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[redacted-email]')
+      // UAE mobile in international form. The local `05x` form is deliberately *not*
+      // matched: that pattern also occurs inside a UUID, and mangling every correlation
+      // id would cost more than it protects.
+      .replace(/(?:\+|00)?971[\s-]?5\d[\s-]?\d{3}[\s-]?\d{4}/g, '[redacted-phone]')
+  );
 }
 
 /* ----------------------------------------------------------------- helpers -- */

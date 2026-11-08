@@ -2,16 +2,18 @@
  * The eight frozen error codes, their HTTP status mapping, and the throwable errors
  * every route raises.
  *
- * Contracts honoured here:
- *  - §5.2 freezes the code set. It is **not** redeclared below: `ErrorCode` is derived
- *    from `ApiError` in `packages/shared`, so a drift between the two is a type error
- *    rather than a silent divergence (CLAUDE.md rule 4).
- *  - `docs/api-contracts.md` freezes the status mapping. `ERROR_STATUS` is the only
- *    place it is written down.
- *  - §5.2 amendment (orchestrator, Wave 0): the Postgres SQLSTATE mapping in
- *    `SQLSTATE_TO_CODE` is mandatory and exact.
+ * Division of responsibility with `packages/shared`:
  *
- * Two rules about messages:
+ *   packages/shared/constants/errors   the *data* — the code union, the status table,
+ *                                      the message table, the SQLSTATE table
+ *   lib/api/errors.ts (here)           the *behaviour* — throwables, normalisation,
+ *                                      and the rules about what may be said
+ *
+ * None of those four tables is redeclared below. Two copies would be two chances to
+ * drift, and CLAUDE.md rule 4 forbids a local copy of a shared enum or error code. They
+ * arrive through `lib/shared.ts`, the lane's single import seam.
+ *
+ * Two rules about messages, which are this file's to enforce:
  *  1. A raw Postgres message may echo row data, so it never reaches a client. It is
  *     logged server-side through the redaction allowlist and the frozen envelope is
  *     returned instead.
@@ -21,44 +23,15 @@
 
 import { ZodError } from 'zod';
 
-import type { ApiError } from '@/lib/shared';
+import { ERROR_MESSAGES, ERROR_STATUS, errorCodeForSqlState, type ErrorCode } from '@/lib/shared';
 
-/**
- * The frozen eight, derived rather than redeclared. When `packages/shared` lands this
- * resolves to its union; a code outside the set then fails to compile anywhere.
- */
-export type ErrorCode = ApiError['error']['code'];
+export { ERROR_MESSAGES, ERROR_STATUS, SQLSTATE_ERROR_CODES } from '@/lib/shared';
+export type { ErrorCode } from '@/lib/shared';
 
-/**
- * Status mapping, per `docs/api-contracts.md`. The `Record<ErrorCode, number>`
- * annotation is load-bearing: it fails the build if the shared union gains, loses or
- * renames a code.
- */
-export const ERROR_STATUS: Record<ErrorCode, number> = {
-  VALIDATION_ERROR: 400,
-  UNAUTHENTICATED: 401,
-  FORBIDDEN: 403,
-  NOT_FOUND: 404,
-  CONFLICT: 409,
-  UNPROCESSABLE: 422,
-  RATE_LIMITED: 429,
-  INTERNAL_ERROR: 500,
-};
-
-/**
- * Client-safe default messages. Generic on purpose — a message that explains *why*
- * access was denied tells an attacker whether the record exists.
- */
-export const ERROR_MESSAGE: Record<ErrorCode, string> = {
-  VALIDATION_ERROR: 'The request is invalid.',
-  UNAUTHENTICATED: 'Authentication is required.',
-  FORBIDDEN: 'You are not authorized to perform this action.',
-  NOT_FOUND: 'The requested resource does not exist or is not accessible.',
-  CONFLICT: 'The request conflicts with the current state of the resource.',
-  UNPROCESSABLE: 'The request could not be processed.',
-  RATE_LIMITED: 'Too many requests. Please retry shortly.',
-  INTERNAL_ERROR: 'An unexpected error occurred.',
-};
+/** Used when a code somehow falls outside the frozen eight. Never customised. */
+export const GENERIC_ERROR_MESSAGE: string = ERROR_MESSAGES.INTERNAL_ERROR;
+/** Status used when a code somehow falls outside the frozen eight. */
+export const GENERIC_ERROR_STATUS: number = ERROR_STATUS.INTERNAL_ERROR;
 
 /** Codes whose message a route may customise. `INTERNAL_ERROR` is absent deliberately. */
 const CUSTOMISABLE: ReadonlySet<string> = new Set([
@@ -100,14 +73,14 @@ export class ApiRouteError extends Error {
   readonly retryAfterSeconds?: number;
 
   constructor(code: ErrorCode, options: ApiRouteErrorOptions = {}) {
-    const fallback = ERROR_MESSAGE[code] ?? ERROR_MESSAGE.INTERNAL_ERROR;
-    const publicMessage =
+    const fallback: string = ERROR_MESSAGES[code] ?? GENERIC_ERROR_MESSAGE;
+    const publicMessage: string =
       options.message && CUSTOMISABLE.has(code as string) ? options.message : fallback;
 
     super(options.message ?? fallback, options.cause === undefined ? {} : { cause: options.cause });
     this.name = 'ApiRouteError';
     this.code = code;
-    this.status = ERROR_STATUS[code] ?? 500;
+    this.status = ERROR_STATUS[code] ?? GENERIC_ERROR_STATUS;
     this.publicMessage = publicMessage;
     this.logFields = options.logFields ?? {};
     if (options.retryAfterSeconds !== undefined) {
@@ -118,20 +91,14 @@ export class ApiRouteError extends Error {
 
 export const unauthenticated = (o?: ApiRouteErrorOptions) =>
   new ApiRouteError('UNAUTHENTICATED', o);
-export const forbidden = (o?: ApiRouteErrorOptions) =>
-  new ApiRouteError('FORBIDDEN', o);
-export const notFound = (o?: ApiRouteErrorOptions) =>
-  new ApiRouteError('NOT_FOUND', o);
-export const conflict = (o?: ApiRouteErrorOptions) =>
-  new ApiRouteError('CONFLICT', o);
-export const unprocessable = (o?: ApiRouteErrorOptions) =>
-  new ApiRouteError('UNPROCESSABLE', o);
+export const forbidden = (o?: ApiRouteErrorOptions) => new ApiRouteError('FORBIDDEN', o);
+export const notFound = (o?: ApiRouteErrorOptions) => new ApiRouteError('NOT_FOUND', o);
+export const conflict = (o?: ApiRouteErrorOptions) => new ApiRouteError('CONFLICT', o);
+export const unprocessable = (o?: ApiRouteErrorOptions) => new ApiRouteError('UNPROCESSABLE', o);
 export const validationError = (o?: ApiRouteErrorOptions) =>
   new ApiRouteError('VALIDATION_ERROR', o);
-export const rateLimited = (o?: ApiRouteErrorOptions) =>
-  new ApiRouteError('RATE_LIMITED', o);
-export const internalError = (o?: ApiRouteErrorOptions) =>
-  new ApiRouteError('INTERNAL_ERROR', o);
+export const rateLimited = (o?: ApiRouteErrorOptions) => new ApiRouteError('RATE_LIMITED', o);
+export const internalError = (o?: ApiRouteErrorOptions) => new ApiRouteError('INTERNAL_ERROR', o);
 
 export function isApiRouteError(value: unknown): value is ApiRouteError {
   return value instanceof ApiRouteError;
@@ -140,23 +107,19 @@ export function isApiRouteError(value: unknown): value is ApiRouteError {
 /* ------------------------------------------------------------- postgres ---- */
 
 /**
- * SQLSTATE → frozen code. Mandated verbatim by the Wave 0 §5.2 amendment.
+ * Why there is no SQLSTATE table in this file.
+ *
+ * `packages/shared/constants/errors` owns `SQLSTATE_ERROR_CODES` and
+ * `errorCodeForSqlState`, mandated verbatim by the Wave 0 §5.2 amendment and re-exported
+ * above. The table is shared because the RLS suite asserts against the same mapping the
+ * wrapper applies; two copies would let them agree on paper and differ in fact.
  *
  * `42501` covers both an explicit `insufficient_privilege` raise in `0003` and a Row
  * Level Security denial on a write, which is why a cross-organization write surfaces as
  * 403 rather than 500. An RLS-denied *read* returns zero rows and no error at all; that
- * path is a 404, raised by the route, never a 403 — confirming a record exists is
- * itself a disclosure.
+ * path is a 404, raised by the route, never a 403 — confirming a record exists is itself
+ * a disclosure.
  */
-export const SQLSTATE_TO_CODE: Readonly<Record<string, ErrorCode>> = {
-  P0001: 'CONFLICT',
-  '42501': 'FORBIDDEN',
-  '28000': 'UNAUTHENTICATED',
-  '22023': 'VALIDATION_ERROR',
-  '23505': 'CONFLICT',
-  '23503': 'UNPROCESSABLE',
-  '23514': 'UNPROCESSABLE',
-};
 
 /** The shape `@supabase/postgrest-js` returns in `{ error }`, structurally matched. */
 export interface PostgresErrorLike {
@@ -204,10 +167,8 @@ const POSTGREST_CODE_TO_CODE: Readonly<Record<string, ErrorCode>> = {
 export function postgresErrorToApiError(error: PostgresErrorLike): ApiRouteError {
   const sqlstate = typeof error.code === 'string' ? error.code : '';
   const token = postgresErrorToken(error.message);
-  const code =
-    SQLSTATE_TO_CODE[sqlstate] ??
-    POSTGREST_CODE_TO_CODE[sqlstate] ??
-    ('INTERNAL_ERROR');
+  const code: ErrorCode =
+    POSTGREST_CODE_TO_CODE[sqlstate] ?? errorCodeForSqlState(sqlstate || null);
 
   return new ApiRouteError(code, {
     logFields: { pg_code: sqlstate || 'unknown', reason: token ?? 'unmapped' },
@@ -247,7 +208,7 @@ export function toApiRouteError(thrown: unknown): ApiRouteError {
     const mapped = postgresErrorToApiError(thrown);
     // Only accept the mapping when the SQLSTATE was actually recognised; an arbitrary
     // object with a `message` must not be laundered into a 4xx.
-    if (mapped.code !== ('INTERNAL_ERROR')) return mapped;
+    if (mapped.code !== 'INTERNAL_ERROR') return mapped;
   }
 
   return new ApiRouteError('INTERNAL_ERROR', {

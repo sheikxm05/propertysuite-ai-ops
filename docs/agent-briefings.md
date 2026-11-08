@@ -39,7 +39,14 @@ HARD RULES — violating any of these breaks the other five agents:
   4. Every API route handler uses withApiHandler (§5.2). Every mutation writes an audit
      row. Every error uses the frozen envelope. No lane invents an error code.
   5. Every schema and enum comes from packages/shared (§5.4). Never define a local
-     duplicate of a shared type.
+     duplicate of a shared type. The canonical import specifier is `@shared/index`
+     (frozen as amendment A15) — import from there, not from a deep path.
+     Route handlers go through `withApiHandler`; its ctx is
+     { session, membership, body, query, params, request, supabase, requestId, logger }.
+     If you need the RLS-bypassing service-role client, use `withPrivilegedApiHandler`
+     from lib/api/server-only/ — and justify it, because RLS is the floor you would be
+     stepping over. Auth routes are /sign-in, /sign-up, /forgot-password and
+     /accept-invitation (A17); middleware names them literally, so do not rename them.
   6. Never install a dependency. The full list is pre-installed (§5.1). A missing
      dependency is a planning defect — report it.
   7. Run `node scripts/check-lane-ownership.mjs --lane <your-id>` before every commit.

@@ -93,19 +93,27 @@ export const ACTIVITY_TYPES = [
 export type ActivityType = (typeof ACTIVITY_TYPES)[number];
 
 /**
- * `jobs.status` — the durable job runner table added by migration `0003`
- * (`docs/implementation-plan.md` §5, Sprint 1). `dead_letter` is terminal: a
- * job that exhausts its bounded retries lands there instead of retrying
- * forever.
+ * `jobs.status` — transcribed from the `check` constraint on the job runner
+ * table created by migration `0003`:
+ * `check (status in ('queued', 'running', 'failed', 'dead', 'done'))`.
+ *
+ * `dead` is the dead-letter state and is terminal: a job that exhausts its
+ * bounded retries lands there instead of retrying forever
+ * (`docs/requirements.md` §7). `done` is terminal success. `failed` is
+ * retryable — it is awaiting its next `next_run_at`.
  */
-export const JOB_STATUSES = [
-  'queued',
-  'running',
-  'succeeded',
-  'failed',
-  'dead_letter',
-] as const;
+export const JOB_STATUSES = ['queued', 'running', 'failed', 'dead', 'done'] as const;
 export type JobStatus = (typeof JOB_STATUSES)[number];
+
+/** Terminal job states. Nothing re-runs out of these. */
+export const TERMINAL_JOB_STATUSES = ['dead', 'done'] as const satisfies readonly JobStatus[];
+
+/** The dead-letter state. */
+export const DEAD_LETTER_JOB_STATUS = 'dead' as const satisfies JobStatus;
+
+/** `organization_invitations.status` — added by migration `0003` (amendment A4). */
+export const INVITATION_STATUSES = ['pending', 'accepted', 'revoked'] as const;
+export type InvitationStatus = (typeof INVITATION_STATUSES)[number];
 
 /** `jobs.type` — the job kinds this build enqueues. */
 export const JOB_TYPES = ['document_extraction'] as const;

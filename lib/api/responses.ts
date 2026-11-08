@@ -20,12 +20,20 @@
 import { REQUEST_ID_HEADER } from '@/lib/observability/correlation';
 import type { ApiError } from '@/lib/shared';
 
-import { ERROR_MESSAGE, ERROR_STATUS, type ApiRouteError, type ErrorCode } from './errors';
+import {
+  ERROR_MESSAGES,
+  ERROR_STATUS,
+  GENERIC_ERROR_MESSAGE,
+  GENERIC_ERROR_STATUS,
+  type ApiRouteError,
+  type ErrorCode,
+} from './errors';
 
-/** Maximum page size, frozen in §5.7. */
-export const MAX_PAGE_SIZE = 100;
-/** Default page size, frozen in §5.7. */
-export const DEFAULT_PAGE_SIZE = 25;
+/**
+ * Page-size bounds are not defined here. `packages/shared/constants/pagination` owns
+ * `DEFAULT_PAGE_SIZE` and `MAX_PAGE_SIZE`, and `PaginationQuerySchema` already enforces
+ * them, so a list route gets the bound from its schema rather than from this module.
+ */
 
 export interface ResponseInitLike {
   status?: number;
@@ -80,7 +88,7 @@ export function errorResponse(
   const body: ApiError = {
     error: {
       code,
-      message: options.message ?? ERROR_MESSAGE[code] ?? ERROR_MESSAGE.INTERNAL_ERROR,
+      message: options.message ?? ERROR_MESSAGES[code] ?? GENERIC_ERROR_MESSAGE,
       request_id: requestId,
     },
   };
@@ -91,7 +99,7 @@ export function errorResponse(
   }
 
   return jsonResponse(body, requestId, {
-    status: options.status ?? ERROR_STATUS[code] ?? 500,
+    status: options.status ?? ERROR_STATUS[code] ?? GENERIC_ERROR_STATUS,
     headers,
   });
 }
@@ -154,11 +162,7 @@ export function withCookies(
  * `SameSite=Lax` and `Path=/` unless Supabase asked for something else — the defaults
  * are the safe ones, so an omitted option cannot downgrade a session cookie.
  */
-function serialiseCookie(
-  name: string,
-  value: string,
-  options: Record<string, unknown>,
-): string {
+function serialiseCookie(name: string, value: string, options: Record<string, unknown>): string {
   const parts = [`${name}=${encodeURIComponent(value)}`];
   parts.push(`Path=${typeof options.path === 'string' ? options.path : '/'}`);
   if (typeof options.maxAge === 'number') parts.push(`Max-Age=${Math.floor(options.maxAge)}`);

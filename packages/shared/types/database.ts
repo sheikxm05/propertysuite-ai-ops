@@ -21,11 +21,12 @@
  *
  *   - `supabase/migrations/0001_initial_schema.sql` (all tables, all three
  *     Postgres enums, `current_profile_id`, `is_org_member`)
- *   - `docs/implementation-plan.md` §3 finding 10 — `documents.extracted_text`,
- *     added by migration `0002`
- *   - `docs/implementation-plan.md` §5 Sprint 1 — the `jobs` table and the
- *     three `security definer` RPCs, added by migration `0003`
- *   - `docs/parallel-execution-plan.md` §5.3 — the six RLS helper signatures
+ *   - `supabase/migrations/0002_rls_hardening.sql` — the six RLS helper
+ *     signatures in §5.3, read directly from the migration
+ *   - `supabase/migrations/0003_domain_integrity.sql` — `documents.extracted_text`
+ *     and `documents.ticket_id`, the `jobs` and `organization_invitations`
+ *     tables, `log_audit`, and the four security-definer RPCs. Every signature
+ *     and every column below was transcribed from that file, not inferred.
  *
  * The post-`0003` schema is typed, not just the post-`0001` schema, because the
  * feature lanes that consume this file cannot add to it later.
@@ -586,6 +587,16 @@ export type Database = {
           organization_id: string;
           property_id: string | null;
           tenancy_id: string | null;
+          /**
+           * Provider completion evidence, added by `0003` per amendment A7,
+           * with the composite foreign key
+           * `(organization_id, ticket_id) -> maintenance_tickets`.
+           *
+           * A null `ticket_id` is a tenancy contract or property document, and
+           * that is exactly what keeps a service provider out of them: the A7
+           * policies require `ticket_id is not null`.
+           */
+          ticket_id: string | null;
           document_type: string;
           storage_path: string;
           extracted_data: Json | null;
@@ -600,6 +611,7 @@ export type Database = {
           organization_id: string;
           property_id?: string | null;
           tenancy_id?: string | null;
+          ticket_id?: string | null;
           document_type: string;
           storage_path: string;
           extracted_data?: Json | null;
@@ -613,6 +625,7 @@ export type Database = {
           organization_id?: string;
           property_id?: string | null;
           tenancy_id?: string | null;
+          ticket_id?: string | null;
           document_type?: string;
           storage_path?: string;
           extracted_data?: Json | null;
@@ -641,6 +654,13 @@ export type Database = {
             columns: ['organization_id', 'tenancy_id'];
             isOneToOne: false;
             referencedRelation: 'tenancies';
+            referencedColumns: ['organization_id', 'id'];
+          },
+          {
+            foreignKeyName: 'documents_organization_id_ticket_id_fkey';
+            columns: ['organization_id', 'ticket_id'];
+            isOneToOne: false;
+            referencedRelation: 'maintenance_tickets';
             referencedColumns: ['organization_id', 'id'];
           },
           {
@@ -857,110 +877,239 @@ export type Database = {
           id: string;
           type: string;
           payload: Json;
-          idempotency_key: string;
+          idempotency_key: string | null;
           attempts: number;
-          next_run_at: string;
+          next_run_at: string | null;
           status: string;
           last_error: string | null;
           created_at: string;
-          updated_at: string;
         };
         Insert: {
           id?: string;
           type: string;
           payload?: Json;
-          idempotency_key: string;
+          idempotency_key?: string | null;
           attempts?: number;
-          next_run_at?: string;
+          next_run_at?: string | null;
           status?: string;
           last_error?: string | null;
           created_at?: string;
-          updated_at?: string;
         };
         Update: {
           id?: string;
           type?: string;
           payload?: Json;
-          idempotency_key?: string;
+          idempotency_key?: string | null;
           attempts?: number;
-          next_run_at?: string;
+          next_run_at?: string | null;
           status?: string;
           last_error?: string | null;
           created_at?: string;
-          updated_at?: string;
         };
         Relationships: [];
+      };
+      /**
+       * Pending organization invitations, added by migration `0003`
+       * (amendment A4): `organization_members.profile_id` is `NOT NULL`, so an
+       * invitee who has not signed up yet cannot be represented as a member.
+       *
+       * `token_hash` holds a SHA-256 hash of the invitation token — never the
+       * token itself, so a database read cannot be replayed as an acceptance.
+       * The plaintext token is returned exactly once, by `invite_member`, and
+       * must never be logged. The admin SELECT policy omits the column, so a
+       * client read never returns it even though it is typed here.
+       */
+      organization_invitations: {
+        Row: {
+          id: string;
+          organization_id: string;
+          email: string;
+          role: Database['public']['Enums']['member_role'];
+          /** SHA-256 hash. Never read this client-side; never log it. */
+          token_hash: string;
+          status: string;
+          invited_by_profile_id: string | null;
+          accepted_profile_id: string | null;
+          expires_at: string;
+          accepted_at: string | null;
+          created_at: string;
+        };
+        /** Written only by the `invite_member` / `accept_invitation` / `revoke_invitation` RPCs. */
+        Insert: {
+          id?: string;
+          organization_id: string;
+          email: string;
+          role: Database['public']['Enums']['member_role'];
+          token_hash: string;
+          status?: string;
+          invited_by_profile_id?: string | null;
+          accepted_profile_id?: string | null;
+          expires_at: string;
+          accepted_at?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          organization_id?: string;
+          email?: string;
+          role?: Database['public']['Enums']['member_role'];
+          token_hash?: string;
+          status?: string;
+          invited_by_profile_id?: string | null;
+          accepted_profile_id?: string | null;
+          expires_at?: string;
+          accepted_at?: string | null;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'organization_invitations_organization_id_fkey';
+            columns: ['organization_id'];
+            isOneToOne: false;
+            referencedRelation: 'organizations';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'organization_invitations_invited_by_profile_id_fkey';
+            columns: ['invited_by_profile_id'];
+            isOneToOne: false;
+            referencedRelation: 'profiles';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'organization_invitations_accepted_profile_id_fkey';
+            columns: ['accepted_profile_id'];
+            isOneToOne: false;
+            referencedRelation: 'profiles';
+            referencedColumns: ['id'];
+          },
+        ];
       };
     };
     Views: { [_ in never]: never };
     Functions: {
-      /** `0001`. The caller's `profiles.id`, derived from `auth.uid()`. */
+      /* ---------------------------------------------------------------- */
+      /* 0001 — baseline helpers                                          */
+      /* ---------------------------------------------------------------- */
+
+      /** The caller's `profiles.id`, derived from `auth.uid()`. */
       current_profile_id: {
         Args: Record<PropertyKey, never>;
         Returns: string;
       };
-      /** `0001`. */
       is_org_member: {
         Args: { target_org: string };
         Returns: boolean;
       };
-      /** `0002` — §5.3. */
+
+      /* ---------------------------------------------------------------- */
+      /* 0002 — RLS helpers, §5.3. Argument names verified against the    */
+      /* migration.                                                       */
+      /* ---------------------------------------------------------------- */
+
       has_org_role: {
         Args: { org: string; roles: Database['public']['Enums']['member_role'][] };
         Returns: boolean;
       };
-      /** `0002` — §5.3. `organization_admin` or `property_manager`. */
+      /** `organization_admin` or `property_manager`. */
       is_org_staff: {
         Args: { org: string };
         Returns: boolean;
       };
-      /** `0002` — §5.3. */
       current_tenant_id: {
         Args: { org: string };
         Returns: string;
       };
-      /** `0002` — §5.3. */
       current_provider_id: {
         Args: { org: string };
         Returns: string;
       };
-      /** `0002` — §5.3. */
       owns_property: {
         Args: { org: string; property_id: string };
         Returns: boolean;
       };
-      /** `0002` — §5.3. True when the caller holds an active tenancy on the unit. */
+      /** True when the caller holds an active tenancy on the unit. */
       can_access_unit: {
         Args: { org: string; unit_id: string };
         Returns: boolean;
       };
+
+      /* ---------------------------------------------------------------- */
+      /* 0003 — audit writer and the security-definer RPCs.               */
+      /* Signatures verified against 0003_domain_integrity.sql.           */
+      /* ---------------------------------------------------------------- */
+
       /**
-       * `0003` — `security definer` onboarding RPC. Creates the organization
-       * and the caller's `organization_admin` membership in one transaction.
+       * Writes an `audit_logs` row and returns its id. `p_organization_id` is
+       * the fifth, defaulted parameter added by amendment A3 —
+       * `audit_logs.organization_id` is `NOT NULL` and cannot be derived from
+       * the other four arguments.
        *
-       * PROVISIONAL: the three RPC signatures below are not frozen in
-       * `docs/parallel-execution-plan.md` §5 (§5.3 freezes only the six RLS
-       * helpers), so they are typed from `docs/implementation-plan.md` §5
-       * Sprint 1 and reported as a planning defect by lane w0-l4. Regenerate
-       * this file once `0003` has merged.
+       * `p_metadata` must never carry document text, message bodies, tokens or
+       * personal data: `audit_logs` is append-only.
        */
-      create_organization: {
-        Args: { org_name: string; org_slug: string };
-        Returns: string;
-      };
-      /** `0003` — `security definer`. Issues an invitation. PROVISIONAL, see above. */
-      invite_member: {
+      log_audit: {
         Args: {
-          org: string;
-          invitee_email: string;
-          invitee_role: Database['public']['Enums']['member_role'];
+          p_action: string;
+          p_entity_type: string;
+          p_entity_id: string | null;
+          p_metadata?: Json;
+          p_organization_id?: string | null;
         };
         Returns: string;
       };
-      /** `0003` — `security definer`. Binds the caller to a pending invitation. PROVISIONAL, see above. */
+
+      /**
+       * Creates the organization and the caller's `organization_admin`
+       * membership in one transaction. There is no client INSERT policy on
+       * either table by design (§3 finding 8).
+       *
+       * Returns `{ id, name, slug, status, created_at }` — parse it with
+       * `OrganizationSchema`.
+       */
+      create_organization: {
+        Args: { p_name: string; p_slug: string };
+        Returns: Json;
+      };
+
+      /**
+       * `organization_admin` only. Issues an invitation and returns
+       * `{ invitation_id, token, role, expires_at }`.
+       *
+       * The plaintext `token` is returned EXACTLY ONCE — the table stores only
+       * a SHA-256 hash. Never log it, never write it to an audit row, and never
+       * put it in a URL that is logged. Parse with `InviteMemberResultSchema`.
+       */
+      invite_member: {
+        Args: {
+          p_org: string;
+          p_email: string;
+          p_role: Database['public']['Enums']['member_role'];
+        };
+        Returns: Json;
+      };
+
+      /**
+       * Accepted by the invited user only: the authenticated account's email
+       * must match the invitation. Activates the membership and consumes the
+       * invitation.
+       *
+       * Returns `{ organization_id, member_id, role }` — parse with
+       * `AcceptInvitationResultSchema`.
+       */
       accept_invitation: {
-        Args: { invitation_token: string };
-        Returns: string;
+        Args: { p_token: string };
+        Returns: Json;
+      };
+
+      /**
+       * `organization_admin` only. Returns `{ invitation_id, status }`.
+       * Added to the frozen set after fan-out by amendment A4: an admin who can
+       * invite but never revoke is not a shippable flow.
+       */
+      revoke_invitation: {
+        Args: { p_invitation_id: string };
+        Returns: Json;
       };
     };
     Enums: {

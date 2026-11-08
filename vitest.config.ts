@@ -19,9 +19,7 @@
  * whole purpose is that an unproven isolation claim must be visible.
  */
 
-import { defineConfig } from 'vitest/config';
-import react from '@vitejs/plugin-react';
-import tsconfigPaths from 'vite-tsconfig-paths';
+import { defineConfig, type UserConfig } from 'vitest/config';
 
 /** Positional CLI arguments, i.e. Vitest's own file filters. */
 const filters = process.argv
@@ -40,62 +38,77 @@ const gatedExclusions = [
   ...(evalsRequested ? [] : ['evals/**']),
 ];
 
-export default defineConfig({
-  plugins: [
-    // `@/*` and `@shared/*` come from tsconfig.json, so a test imports exactly what the
-    // application imports. No second copy of the alias map to drift out of sync.
-    tsconfigPaths(),
-    react(),
-  ],
+/**
+ * The config is async and imports its plugins dynamically on purpose.
+ * `vite-tsconfig-paths@5` and `@vitejs/plugin-react@4` are both ESM-only, and this
+ * package has no `"type": "module"` (package.json belongs to lane w0-l1 and is not
+ * ours to change), so Vite bundles this file as CJS and a static import of either one
+ * fails with "ESM file cannot be loaded by require". A dynamic import inside an async
+ * factory is evaluated as ESM and works. Do not "simplify" this back to static imports.
+ */
+export default defineConfig(async (): Promise<UserConfig> => {
+  const [{ default: tsconfigPaths }, { default: react }] = await Promise.all([
+    import('vite-tsconfig-paths'),
+    import('@vitejs/plugin-react'),
+  ]);
 
-  test: {
-    environment: 'node',
-    globals: true,
-    setupFiles: ['tests/_harness/setup.ts'],
-    include: [
-      'packages/shared/**/*.{test,spec}.{ts,tsx}',
-      'lib/**/*.{test,spec}.{ts,tsx}',
-      'lib/**/__tests__/**/*.{test,spec}.{ts,tsx}',
-      'services/**/*.{test,spec}.{ts,tsx}',
-      'tests/**/*.{test,spec}.{ts,tsx}',
-      'evals/**/*.{test,spec}.{ts,tsx}',
-    ],
-    exclude: [
-      '**/node_modules/**',
-      '**/dist/**',
-      '.next/**',
-      // Playwright owns tests/e2e (w2-l1). Vitest must never pick those up.
-      'tests/e2e/**',
-      'tests/_harness/e2e/**',
-      ...gatedExclusions,
+  return {
+    plugins: [
+      // `@/*` and `@shared/*` come from tsconfig.json, so a test imports exactly what the
+      // application imports. No second copy of the alias map to drift out of sync.
+      tsconfigPaths(),
+      react(),
     ],
 
-    // The RLS suite shares one database and one fixture set. Running its files in
-    // parallel workers would make assertions race each other and produce flaky
-    // "isolation proven" results, which is the one outcome this lane cannot ship.
-    pool: 'forks',
-    poolOptions: { forks: { singleFork: rlsRequested } },
-    fileParallelism: !rlsRequested,
-    sequence: { concurrent: false },
+    test: {
+      environment: 'node',
+      globals: true,
+      setupFiles: ['tests/_harness/setup.ts'],
+      include: [
+        'packages/shared/**/*.{test,spec}.{ts,tsx}',
+        'lib/**/*.{test,spec}.{ts,tsx}',
+        'lib/**/__tests__/**/*.{test,spec}.{ts,tsx}',
+        'services/**/*.{test,spec}.{ts,tsx}',
+        'tests/**/*.{test,spec}.{ts,tsx}',
+        'evals/**/*.{test,spec}.{ts,tsx}',
+      ],
+      exclude: [
+        '**/node_modules/**',
+        '**/dist/**',
+        '.next/**',
+        // Playwright owns tests/e2e (w2-l1). Vitest must never pick those up.
+        'tests/e2e/**',
+        'tests/_harness/e2e/**',
+        ...gatedExclusions,
+      ],
 
-    // Seeding two organizations through real HTTP calls is slow; assertions are not.
-    testTimeout: rlsRequested ? 60_000 : 10_000,
-    hookTimeout: rlsRequested ? 180_000 : 20_000,
+      // The RLS suite shares one database and one fixture set. Running its files in
+      // parallel workers would make assertions race each other and produce flaky
+      // "isolation proven" results, which is the one outcome this lane cannot ship.
+      pool: 'forks',
+      poolOptions: { forks: { singleFork: rlsRequested } },
+      fileParallelism: !rlsRequested,
+      sequence: { concurrent: false },
 
-    // Resolves credentials, verifies the stack is reachable, seeds the fixtures, and on
-    // teardown writes the policy-coverage report and fails the run if any policy in the
-    // §4 matrix was never exercised.
-    globalSetup: rlsRequested ? ['tests/_harness/rls-global-setup.ts'] : [],
+      // Seeding two organizations through real HTTP calls is slow; assertions are not.
+      testTimeout: rlsRequested ? 60_000 : 10_000,
+      hookTimeout: rlsRequested ? 180_000 : 20_000,
 
-    reporters: process.env.CI ? ['default', 'junit'] : ['default'],
-    outputFile: { junit: 'test-results/vitest-junit.xml' },
+      // Resolves credentials, verifies the stack is reachable, seeds the fixtures, and on
+      // teardown writes the policy-coverage report and fails the run if any policy in the
+      // §4 matrix was never exercised.
+      globalSetup: rlsRequested ? ['tests/_harness/rls-global-setup.ts'] : [],
 
-    coverage: {
-      provider: 'v8',
-      reportsDirectory: 'coverage',
-      reporter: ['text', 'html', 'lcov'],
-      include: ['lib/**', 'packages/shared/**', 'services/**'],
-      exclude: ['**/*.test.ts', '**/__tests__/**', '**/types/**', '**/*.d.ts'],
+      reporters: process.env.CI ? ['default', 'junit'] : ['default'],
+      outputFile: { junit: 'test-results/vitest-junit.xml' },
+
+      coverage: {
+        provider: 'v8',
+        reportsDirectory: 'coverage',
+        reporter: ['text', 'html', 'lcov'],
+        include: ['lib/**', 'packages/shared/**', 'services/**'],
+        exclude: ['**/*.test.ts', '**/__tests__/**', '**/types/**', '**/*.d.ts'],
+      },
     },
-  },
+  };
 });

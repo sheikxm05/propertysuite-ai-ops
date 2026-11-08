@@ -37,7 +37,11 @@ export default defineConfig({
   expect: { timeout: 10_000 },
 
   reporter: isCI
-    ? [['list'], ['html', { open: 'never', outputFolder: 'playwright-report' }], ['junit', { outputFile: 'test-results/e2e-junit.xml' }]]
+    ? [
+        ['list'],
+        ['html', { open: 'never', outputFolder: 'playwright-report' }],
+        ['junit', { outputFile: 'test-results/e2e-junit.xml' }],
+      ]
     : [['list'], ['html', { open: 'never', outputFolder: 'playwright-report' }]],
 
   use: {

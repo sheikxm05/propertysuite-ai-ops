@@ -19,6 +19,31 @@
 --                                            route through 0003's security definer RPCs.
 --                                            No INSERT policy is added here, by design.
 --
+-- ORCHESTRATOR AMENDMENTS to the §4 matrix, adjudicated after this lane reported
+-- them as planning defects. The matrix in implementation-plan.md §4 is amended;
+-- this file implements the amended form:
+--   A  `profiles` gains a self-scoped UPDATE (a caller may edit only their own
+--      row, and may not re-point auth_user_id at another user). There is still
+--      no client INSERT: row creation happens in an auth.users AFTER INSERT
+--      security definer trigger owned by 0003.
+--   B  `service_provider` gains SELECT and INSERT on `documents`, scoped
+--      strictly to a ticket assigned to them, so completion evidence is
+--      possible. A provider still cannot reach a tenancy contract or a property
+--      document. This depends on `documents.ticket_id`, which 0003 adds — see
+--      the ORDERING DEPENDENCY note in §5 under `documents`.
+--   C  `organization_admin` gains INSERT on `maintenance_activities` on the same
+--      terms as property_manager. Without it an admin-performed ticket
+--      transition could not write its activity row, and "an immutable history of
+--      every transition" would quietly mean "every transition except an admin's".
+--   D  The reporting tenant gains a cancel path on `maintenance_tickets` while
+--      the ticket is still `open`, matching the state machine ruling below.
+--
+-- Ticket state machine as ruled for 0003, which nothing here contradicts:
+-- the legal edge set includes `awaiting_approval -> in_progress` (rework;
+-- admin/manager only), and `cancelled` is reachable by admin/manager from any
+-- non-terminal state, by the reporting tenant only while `open`, and never by a
+-- service provider or a property owner.
+--
 -- Acceptance criteria named in the per-policy comments below are the numbered
 -- functional acceptance criteria in docs/requirements.md §6:
 --   AC1  a user can authenticate and belong to an organization
@@ -376,10 +401,27 @@ using (
   )
 );
 
--- No INSERT and no UPDATE policy on profiles: the §4 matrix grants read only.
--- See the planning defect raised by this lane — first-sign-in profile bootstrap
--- (w1-l1) therefore has no client-side write path and needs either a
--- self-scoped write policy added to the matrix or an auth.users trigger in 0003.
+-- AC1. Amendment A. A caller may maintain their OWN profile and nothing else.
+-- The `using` clause pins the target row to the caller. The `with check` clause
+-- re-pins it AND requires auth_user_id to remain the caller's own Supabase user,
+-- so the row cannot be re-pointed at another identity: without that clause a user
+-- could rewrite auth_user_id and silently take over a different person's profile,
+-- which would hand them that person's memberships, tenancies and tickets.
+drop policy if exists profiles_update_self on public.profiles;
+create policy profiles_update_self
+on public.profiles
+for update
+to authenticated
+using (id = (select public.current_profile_id()))
+with check (
+  id = (select public.current_profile_id())
+  and auth_user_id = (select auth.uid())
+);
+
+-- Still NO client INSERT policy on profiles, per amendment A: row creation
+-- happens in 0003's auth.users AFTER INSERT security definer trigger, which keeps
+-- profile creation off the client entirely. A client that could insert its own
+-- profile row could choose its own id and pre-empt a pending invitation.
 
 
 -- -- organization_members -----------------------------------------------------
@@ -848,6 +890,28 @@ with check (
   and status = 'completed'::public.ticket_status
 );
 
+-- AC5. Amendment D. The reporting tenant may withdraw their own request, but
+-- only while it is still `open` — once a provider has been assigned, cancelling
+-- is a manager decision. `using` pins the ticket to the caller and to the
+-- `open` state; `with check` permits exactly one destination state. This is the
+-- tenant's only other write path, and it matches the 0003 state machine ruling:
+-- cancel is admin/manager from any non-terminal state, the reporting tenant only
+-- while open, and never a provider or an owner.
+drop policy if exists maintenance_tickets_update_tenant_cancel on public.maintenance_tickets;
+create policy maintenance_tickets_update_tenant_cancel
+on public.maintenance_tickets
+for update
+to authenticated
+using (
+  tenant_id = (select public.current_tenant_id(organization_id))
+  and status = 'open'::public.ticket_status
+)
+with check (
+  tenant_id = (select public.current_tenant_id(organization_id))
+  and status = 'cancelled'::public.ticket_status
+  and assigned_provider_id is null
+);
+
 -- No DELETE policy. A ticket is cancelled, never deleted (finding 5).
 
 
@@ -931,6 +995,25 @@ with check (
   and actor_profile_id = (select public.current_profile_id())
 );
 
+-- AC10. Amendment C. An organization_admin appends on the same terms as a
+-- property_manager. The §4 matrix originally gave admin R without C, but an admin
+-- has RW on maintenance_tickets, so an admin-performed transition would have been
+-- unable to write its activity row — making the "immutable history of every
+-- transition" silently mean "every transition except an admin's". Kept as a
+-- separate per-role policy rather than widening the manager policy, so the matrix
+-- stays readable row by row.
+drop policy if exists maintenance_activities_insert_admin on public.maintenance_activities;
+create policy maintenance_activities_insert_admin
+on public.maintenance_activities
+for insert
+to authenticated
+with check (
+  (select public.has_org_role(
+     organization_id, array['organization_admin']::public.member_role[]
+   ))
+  and actor_profile_id = (select public.current_profile_id())
+);
+
 -- AC5, AC10. A tenant appends to their own tickets only, in their own name.
 drop policy if exists maintenance_activities_insert_tenant on public.maintenance_activities;
 create policy maintenance_activities_insert_tenant
@@ -967,8 +1050,8 @@ with check (
 
 
 -- -- documents ----------------------------------------------------------------
--- Matrix: admin RW, manager RW, owner R owned, tenant R own tenancy,
---         provider —.
+-- Matrix (as amended, B): admin RW, manager RW, owner R owned,
+--         tenant R own tenancy, provider CR on assigned-ticket evidence only.
 
 -- AC9. Staff read and manage documents for their own organization.
 drop policy if exists documents_select_staff on public.documents;
@@ -1044,9 +1127,119 @@ to authenticated
 using ((select public.is_org_staff(organization_id)))
 with check ((select public.is_org_staff(organization_id)));
 
--- Service providers get no policy on documents in any operation, per the §4
--- matrix. See the planning defect raised by this lane about provider completion
--- evidence, which the matrix as written does not permit.
+-- -- documents: the service_provider evidence policies (amendment B) ----------
+--
+-- ORDERING DEPENDENCY — READ THIS BEFORE APPLYING.
+--
+-- These two policies scope a provider to `documents.ticket_id`, a column that
+-- migration 0003 adds. Migrations apply in ascending order, so on a FRESH
+-- database 0002 runs BEFORE that column exists and the policies cannot be
+-- created yet. Of the two options offered, this lane chose to GUARD the creation
+-- rather than declare that 0002 requires 0003 — because "0002 requires 0003" is
+-- unsatisfiable when 0002 runs first.
+--
+-- Consequences, stated plainly so nobody discovers them on first apply:
+--   * On a fresh 0001 -> 0002 -> 0003 apply the guard is FALSE. The two policies
+--     are NOT created, and a `raise warning` says so in the migration output.
+--     The failure mode is fail-closed: a provider simply cannot upload evidence.
+--     It is a functionality gap, never an access leak.
+--   * The fix is one line in 0003, AFTER it adds the column:
+--         select public.ensure_document_provider_policies();
+--     That function is defined here so w0-l3 does not have to re-implement the
+--     policies, and so the predicate lives in exactly one file — this one.
+--   * The self-check in §7 fails the migration if the column exists while the
+--     policies do not, so the gap cannot survive once 0003 has landed.
+--
+-- This is reported to the orchestrator as a residual ordering defect: the clean
+-- resolution is the one-line call in 0003, or moving these two policies into a
+-- later migration. It is NOT resolved by this file alone.
+
+create or replace function public.ensure_document_provider_policies()
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $fn$
+begin
+  if not exists (
+    select 1
+    from pg_catalog.pg_attribute a
+    join pg_catalog.pg_class c on c.oid = a.attrelid
+    join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relname = 'documents'
+      and a.attname = 'ticket_id'
+      and a.attnum > 0
+      and not a.attisdropped
+  ) then
+    raise warning 'migration 0002: public.documents.ticket_id does not exist yet, so the service_provider evidence policies were NOT created. 0003 must add the column and then call: select public.ensure_document_provider_policies();';
+    return;
+  end if;
+
+  -- AC7, AC9. A provider reads ONLY documents attached to a ticket assigned to
+  -- them. The `ticket_id is not null` clause is what keeps a provider out of
+  -- tenancy contracts and property documents: those rows have a null ticket_id,
+  -- so they can never satisfy this predicate. A provider must never reach a
+  -- tenancy contract.
+  execute $p$drop policy if exists documents_select_provider_assigned on public.documents$p$;
+  execute $p$
+    create policy documents_select_provider_assigned
+    on public.documents
+    for select
+    to authenticated
+    using (
+      ticket_id is not null
+      and exists (
+        select 1
+        from public.maintenance_tickets k
+        where k.organization_id = documents.organization_id
+          and k.id = documents.ticket_id
+          and k.assigned_provider_id = (select public.current_provider_id(documents.organization_id))
+      )
+    )
+  $p$;
+
+  -- AC7, AC9, AC10. A provider uploads completion evidence against an assigned
+  -- ticket, in their own name. property_id and tenancy_id are forced null: a
+  -- provider must not be able to staple their row onto an arbitrary tenancy or
+  -- property in the organization, which would expose it to that tenancy's tenant
+  -- and that property's owner through the policies above. Evidence is
+  -- ticket-scoped and nothing else.
+  execute $p$drop policy if exists documents_insert_provider_assigned on public.documents$p$;
+  execute $p$
+    create policy documents_insert_provider_assigned
+    on public.documents
+    for insert
+    to authenticated
+    with check (
+      uploaded_by = (select public.current_profile_id())
+      and ticket_id is not null
+      and property_id is null
+      and tenancy_id is null
+      and exists (
+        select 1
+        from public.maintenance_tickets k
+        where k.organization_id = documents.organization_id
+          and k.id = documents.ticket_id
+          and k.assigned_provider_id = (select public.current_provider_id(documents.organization_id))
+      )
+    )
+  $p$;
+end
+$fn$;
+
+-- This function creates policies, so it must never be reachable from a client
+-- session. Revoked from PUBLIC (the default grant), anon and authenticated; only
+-- the owner, which is the migration runner, may call it.
+revoke all on function public.ensure_document_provider_policies() from public;
+revoke all on function public.ensure_document_provider_policies() from anon, authenticated;
+
+-- Attempt creation now. No-op with a warning on a fresh database; effective on
+-- any apply where 0003 has already added the column.
+select public.ensure_document_provider_policies();
+
+-- A provider still gets no UPDATE and no DELETE on documents in any form: they
+-- may add evidence and read it back, never revise or remove it.
 
 
 -- -- ai_conversations ---------------------------------------------------------
@@ -1315,6 +1508,40 @@ begin
   if offending is not null then
     raise exception
       'migration 0002: DELETE or FOR ALL policy present on a tenant-scoped table: %', offending;
+  end if;
+
+  -- Amendment B, ordering guard. Once 0003 has added documents.ticket_id there is
+  -- no excuse for the provider evidence policies to be missing, so from that
+  -- moment on their absence is a hard failure rather than a warning.
+  if exists (
+    select 1
+    from pg_catalog.pg_attribute a
+    join pg_catalog.pg_class c on c.oid = a.attrelid
+    join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relname = 'documents'
+      and a.attname = 'ticket_id'
+      and a.attnum > 0
+      and not a.attisdropped
+  ) then
+    select string_agg(want, ', ' order by want)
+      into offending
+    from unnest(array[
+      'documents_select_provider_assigned',
+      'documents_insert_provider_assigned'
+    ]) as want
+    where not exists (
+      select 1
+      from pg_policies p2
+      where p2.schemaname = 'public'
+        and p2.tablename = 'documents'
+        and p2.policyname = want
+    );
+
+    if offending is not null then
+      raise exception
+        'migration 0002: documents.ticket_id exists but the service_provider evidence policies are missing: %. Call select public.ensure_document_provider_policies();', offending;
+    end if;
   end if;
 end
 $check$;

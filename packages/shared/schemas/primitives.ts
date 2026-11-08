@@ -67,11 +67,15 @@ export const PhoneSchema = z
   .string()
   .trim()
   .min(7)
-  .max(24)
-  .regex(/^\+?[0-9][0-9\s()\-.]{5,22}$/, { message: 'Expected a phone number.' })
-  .transform((value) => {
-    const compact = value.replace(/[\s()\-.]/g, '');
-    return compact;
+  .max(32)
+  // Normalize first, then validate. Validating the raw string would mean
+  // enumerating every way a human writes a number — `+971 50 123 4567`,
+  // `(04) 123-4567`, `050.123.4567` — and getting one of them wrong is a
+  // rejected tenant record rather than a security problem, so the permissive
+  // path is the correct one. Only the normalized digits are stored.
+  .transform((value) => value.replace(/[\s()\-.]/g, ''))
+  .refine((compact) => /^\+?[0-9]{7,15}$/.test(compact), {
+    message: 'Expected a phone number of 7 to 15 digits, optionally with a + prefix.',
   });
 
 /* -------------------------------------------------------------------------- */

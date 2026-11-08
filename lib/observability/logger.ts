@@ -85,7 +85,11 @@ export function systemLogger(fields: LogFields = {}): Logger {
 
 /* -------------------------------------------------------------- internals -- */
 
-function build(requestId: string, boundFields: Record<string, unknown>, boundRedacted: number): Logger {
+function build(
+  requestId: string,
+  boundFields: Record<string, unknown>,
+  boundRedacted: number,
+): Logger {
   const emit = (level: LogLevel, message: string, fields?: LogFields): void => {
     if (LEVEL_WEIGHT[level] < LEVEL_WEIGHT[minimumLevel]) return;
 
@@ -112,11 +116,7 @@ function build(requestId: string, boundFields: Record<string, unknown>, boundRed
     error: (message, fields) => emit('error', message, fields),
     child: (fields) => {
       const extra = redactFields(fields);
-      return build(
-        requestId,
-        { ...boundFields, ...extra.fields },
-        boundRedacted + extra.redacted,
-      );
+      return build(requestId, { ...boundFields, ...extra.fields }, boundRedacted + extra.redacted);
     },
   };
 }

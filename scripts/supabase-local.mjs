@@ -244,10 +244,16 @@ function runCli(args, { capture = false } = {}) {
 function cmdDoctor() {
   const { problems, docker, cli, migrations } = preflight();
   console.log('Local Supabase stack preflight');
-  console.log(bullet(`docker daemon : ${docker.ok ? `ok (${docker.serverVersion})` : docker.detail}`));
-  console.log(bullet(`supabase cli  : ${cli.ok ? cli.version.split('\n')[0] : cli.detail || 'not runnable'}`));
+  console.log(
+    bullet(`docker daemon : ${docker.ok ? `ok (${docker.serverVersion})` : docker.detail}`),
+  );
+  console.log(
+    bullet(`supabase cli  : ${cli.ok ? cli.version.split('\n')[0] : cli.detail || 'not runnable'}`),
+  );
   console.log(bullet(`config.toml   : ${existsSync(CONFIG_PATH) ? 'present' : 'MISSING'}`));
-  console.log(bullet(`migrations    : ${migrations.files.length} file(s) ${migrations.files.join(', ')}`));
+  console.log(
+    bullet(`migrations    : ${migrations.files.length} file(s) ${migrations.files.join(', ')}`),
+  );
   if (problems.length === 0) {
     console.log('\nReady. Next: node scripts/supabase-local.mjs start');
     return 0;
@@ -305,9 +311,7 @@ function printEnv(title) {
   }
   if (title) console.log(title);
   for (const [k, v] of Object.entries(wanted)) console.log(`${k}=${v ?? ''}`);
-  console.log(
-    '\nSUPABASE_SERVICE_ROLE_KEY bypasses RLS. It belongs in .env.local (gitignored)',
-  );
+  console.log('\nSUPABASE_SERVICE_ROLE_KEY bypasses RLS. It belongs in .env.local (gitignored)');
   console.log('and nowhere else. Never commit it, never log it, never ship it to a client.');
 }
 

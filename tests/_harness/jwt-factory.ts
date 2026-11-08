@@ -11,12 +11,13 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { MEMBER_ROLES } from '@shared/index';
+// Type-only, so this module still loads at runtime while packages/shared is in flight
+// in lane w0-l4. The role vocabulary is never re-declared here (CLAUDE.md rule 4).
+import type { MemberRole as SharedMemberRole } from '@shared/index';
 
 export type OrgKey = 'A' | 'B';
 
-/** Derived from the frozen shared enum — never re-declared locally (CLAUDE.md rule 4). */
-export type MemberRole = (typeof MEMBER_ROLES)[number];
+export type MemberRole = SharedMemberRole;
 
 export interface PrincipalDescriptor {
   /** Stable handle, e.g. `a_manager`. */

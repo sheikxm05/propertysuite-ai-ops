@@ -133,10 +133,14 @@ function parseEnvFile(path) {
     if (!line || line.startsWith('#')) continue;
     const eq = line.indexOf('=');
     if (eq === -1) continue;
-    const k = line.slice(0, eq).trim().replace(/^export\s+/, '');
+    const k = line
+      .slice(0, eq)
+      .trim()
+      .replace(/^export\s+/, '');
     let v = line.slice(eq + 1).trim();
     const quoted =
-      (v.startsWith('"') && v.endsWith('"')) || (v.startsWith(String.fromCharCode(39)) && v.endsWith(String.fromCharCode(39)));
+      (v.startsWith('"') && v.endsWith('"')) ||
+      (v.startsWith(String.fromCharCode(39)) && v.endsWith(String.fromCharCode(39)));
     if (quoted) v = v.slice(1, -1);
     out[k] = v;
   }

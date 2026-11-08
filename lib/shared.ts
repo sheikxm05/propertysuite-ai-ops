@@ -4,25 +4,35 @@
  * Why this file exists, and why it is not a duplicate of anything:
  *
  * `docs/parallel-execution-plan.md` §5.4 freezes the *export names* that
- * `packages/shared` must provide, but not the *module paths* they live at. W0-L4 is
- * writing that package concurrently with this lane, so `lib/**` cannot see it. Rather
- * than scatter a guess at the path across a dozen files — and risk a dozen edits when
- * W0-L4 lands — every `lib/**` module imports the contracts it needs from here, and
- * this file is the one place that names the shared package.
+ * `packages/shared` must provide, but not the *module paths* they live at. W0-L4 wrote
+ * that package concurrently with this lane, so `lib/**` was coded blind against the
+ * frozen names. Routing every `lib/**` import through here meant exactly one file had to
+ * change when the package landed, rather than a dozen.
  *
  * It re-exports. It defines nothing. CLAUDE.md rule 4 forbids a local copy of a shared
- * type, schema, enum or error code, and there is none below.
- *
- * Both re-exports are **type-only** and therefore erased at compile time. That is
- * deliberate: it means `lib/**` has no runtime dependency on `packages/shared` at all,
- * so the unit tests in this lane run before W0-L4 has landed. Exhaustiveness over the
- * five roles is obtained from the type system — `Record<MemberRole, …>` in
- * `lib/auth/authorize.ts` — rather than from the `MEMBER_ROLES` array at runtime, which
- * is the stronger of the two checks anyway.
- *
- * `lib/**` depends on exactly two frozen names:
- *   - `MemberRole` — the role union, used in the `withApiHandler` signature (§5.2)
- *   - `ApiError`   — the error envelope type (§5.2, built by `lib/api/responses.ts`)
+ * type, schema, enum or error code, and there is none below — in particular the error
+ * code union, the status table, the message table and the SQLSTATE table all come from
+ * `packages/shared/constants/errors`, so `lib/api/errors.ts` owns the *behaviour* of an
+ * error and `packages/shared` owns its *data*. Two tables would be two chances to drift.
  */
 
-export type { MemberRole, ApiError } from '@shared/index';
+/* Identity -------------------------------------------------------------------- */
+
+export type { MemberRole } from '@shared/index';
+
+/* The error contract (§5.2) ---------------------------------------------------- */
+
+export {
+  ERROR_CODES,
+  ERROR_MESSAGES,
+  ERROR_STATUS,
+  SQLSTATE_ERROR_CODES,
+  errorCodeForSqlState,
+  isErrorCode,
+  statusForErrorCode,
+} from '@shared/index';
+export type { ApiError, ApiErrorDetail, ErrorCode } from '@shared/index';
+
+/* Generated database row types ------------------------------------------------ */
+
+export type { Database, Json } from '@shared/index';

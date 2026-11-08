@@ -4,12 +4,18 @@
 -- Domain integrity for the PropertySuite AI Operations Assistant.
 --
 -- This migration is deliberately disjoint from 0002_rls_hardening.sql: 0002 owns
--- row-level security policies and the policy helper functions; 0003 owns triggers,
--- security-definer RPCs, structural schema fixes and the job queue. Nothing here
--- creates, drops or alters a policy.
+-- row-level security policies on the tables 0001 created, plus the policy helper
+-- functions; 0003 owns triggers, security-definer RPCs, structural schema fixes and
+-- the job queue.
 --
--- Closes findings 6, 8, 9 and 10 of docs/implementation-plan.md §3, and encodes the
--- ticket state machine of §4.
+-- One exception, by orchestrator ruling: 0003 declares the SELECT policy on
+-- public.organization_invitations, because 0003 is the file that creates that table.
+-- A lane owns the policies on a table it introduces. No policy on any 0001 table is
+-- created, dropped or altered here.
+--
+-- Closes findings 6, 8, 9 and 10 of docs/implementation-plan.md §3, encodes the
+-- ticket state machine of §4, and carries orchestrator addenda 7 (profile bootstrap
+-- on sign-up) and 8 (documents.ticket_id for completion evidence).
 --
 -- Depends on, and only on, the frozen SQL helper signatures of
 -- docs/parallel-execution-plan.md §5.3, created by 0002:
@@ -18,8 +24,12 @@
 --   public.current_tenant_id(org uuid)                       returns uuid
 --   public.current_provider_id(org uuid)                     returns uuid
 -- plus public.current_profile_id() and public.is_org_member(uuid) from 0001.
--- Every reference lives inside a plpgsql body, so the names bind at call time, not
--- at migration time: this file applies even if 0002 is replayed after it.
+--
+-- Every reference from a plpgsql body binds at call time, not at migration time, so
+-- those are not apply-order dependencies. The one real apply-order dependency runs
+-- the other way: the organization_invitations SELECT policy below calls
+-- has_org_role() in a policy expression, which IS resolved at creation time, so 0002
+-- must apply before 0003. Lexical ordering already guarantees that.
 --
 -- Idempotent: safe to re-run against a database that already has it.
 --
@@ -130,6 +140,60 @@ alter table public.documents
 
 comment on column public.documents.extracted_text is
   'Raw text extracted from the stored object. Retrieval seam (finding 10). Never log this column; never include it in an error message or an audit row.';
+
+-- Orchestrator addendum 8 — completion evidence. documents had no ticket foreign key
+-- at all, so a provider's completion photo could not even be scoped to the ticket it
+-- belongs to, which is why the §4 matrix could not grant a provider any document
+-- access. Nullable: most documents are tenancy or property documents, not evidence.
+--
+-- ORDERING: w0-l2 is adding provider document policies that reference this column,
+-- and 0002 applies BEFORE 0003. Every statement in this block is therefore written
+-- to no-op if the column, constraint or index already exists, so the column can be
+-- declared in 0002 as well without either file conflicting with the other. See the
+-- ordering defect in the lane report: as it stands, 0002 must create this column
+-- itself, because a policy cannot reference a column that does not yet exist.
+alter table public.documents
+  add column if not exists ticket_id uuid;
+
+-- Composite foreign key, so a document can never reference a ticket in another
+-- organization — the same structural guarantee as finding 9, for the same reason.
+-- maintenance_tickets already carries unique (organization_id, id) from 0001.
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint c
+    where c.conrelid = 'public.documents'::regclass
+      and c.conname = 'documents_organization_id_ticket_id_fkey'
+  ) then
+    alter table public.documents
+      add constraint documents_organization_id_ticket_id_fkey
+      foreign key (organization_id, ticket_id)
+      references public.maintenance_tickets (organization_id, id);
+  end if;
+end;
+$$;
+
+create index if not exists idx_documents_ticket
+  on public.documents (organization_id, ticket_id);
+
+comment on column public.documents.ticket_id is
+  'Maintenance ticket this document is evidence for, null for tenancy and property documents. Composite FK with organization_id: a document can never reference another organization''s ticket.';
+
+-- Ruling 8. 0002 declares the service_provider evidence policies inside
+-- public.ensure_document_provider_policies() and SKIPS them with a warning when
+-- documents.ticket_id does not exist — which is always the case on a fresh apply,
+-- since 0002 runs before this file. 0002's own self-check passes in that state
+-- precisely BECAUSE the column is absent, and 0002 never runs again, so without this
+-- call a single fresh 0001 -> 0002 -> 0003 apply would finish with the column present
+-- and the two provider policies permanently missing, and nothing would raise. That is
+-- a fail-OPEN gap, not a fail-closed one.
+--
+-- By this point the column, its composite FK and its index all exist, so the
+-- predicate inside the function holds and both policies get created. The function is
+-- idempotent (drop policy if exists, then create), so re-running 0003 is safe. The
+-- predicate itself is not reimplemented here; 0002 owns it.
+select public.ensure_document_provider_policies();
 
 
 -- ============================================================================
@@ -421,29 +485,43 @@ create trigger maintenance_tickets_assert_provider_org
 
 
 -- --------------------------------------------------------------------------
--- 5.3 Ticket state machine (implementation-plan.md §4)
+-- 5.3 Ticket state machine (implementation-plan.md §4 + orchestrator ruling 4)
 -- --------------------------------------------------------------------------
 -- open -> assigned -> in_progress -> awaiting_approval -> completed, with cancelled
--- reachable from any non-terminal status. completed and cancelled are terminal.
--- This table must agree exactly with ALLOWED_TRANSITIONS in packages/shared.
+-- reachable from any non-terminal status and one rework edge back out of
+-- awaiting_approval. completed and cancelled are terminal.
 --
---   from              | to
---   ------------------+--------------------------------
---   open              | assigned, cancelled
---   assigned          | in_progress, cancelled
---   in_progress       | awaiting_approval, cancelled
---   awaiting_approval | completed, cancelled
---   completed         | (terminal)
---   cancelled         | (terminal)
+-- This table must agree with ALLOWED_TRANSITIONS and TRANSITION_ROLES in
+-- packages/shared/constants/ticket-status.ts edge for edge AND role for role.
+-- There is exactly one rule set; this is its second enforcement point.
 --
--- Role constraints, authenticated callers only:
---   * a service_provider may drive only assigned -> in_progress and
---     in_progress -> awaiting_approval, and only on a ticket assigned to them
---   * only organization_admin / property_manager (is_org_staff) or the reporting
---     tenant may close a ticket to completed
+--   from              | to                | who may drive it
+--   ------------------+-------------------+-----------------------------------------
+--   open              | assigned          | staff
+--   open              | cancelled         | staff, reporting tenant
+--   assigned          | in_progress       | staff, the assigned provider
+--   assigned          | cancelled         | staff
+--   in_progress       | awaiting_approval | staff, the assigned provider
+--   in_progress       | cancelled         | staff
+--   awaiting_approval | completed         | staff, reporting tenant
+--   awaiting_approval | in_progress       | staff   (rework edge, ruling 4)
+--   awaiting_approval | cancelled         | staff
+--   completed         | (terminal)        | nobody
+--   cancelled         | (terminal)        | nobody
 --
--- Structural validity is checked for every caller, service-role included. Illegal
--- transition raises P0001 (-> 409); a role violation raises 42501 (-> 403).
+-- "staff" is is_org_staff(): organization_admin or property_manager.
+--
+-- A service_provider therefore never assigns, cancels, reworks or completes — in
+-- particular it cannot approve its own work. A property_owner reads tickets and
+-- drives nothing. The reporting tenant may cancel only while the ticket is still
+-- open: once it is assigned, work may already be scheduled, so it is no longer the
+-- tenant's call. The rework edge exists so a manager rejecting completion evidence
+-- can send the job back rather than cancel it and discard real work.
+--
+-- Structural validity is checked for every caller, service-role included. An illegal
+-- edge raises P0001 (-> 409 CONFLICT); a legal edge driven by the wrong role raises
+-- 42501 (-> 403 FORBIDDEN) — the same order w0-l4's isAllowedTransition /
+-- canTransition pair documents.
 create or replace function public.enforce_ticket_transition()
 returns trigger
 language plpgsql
@@ -451,8 +529,10 @@ set search_path = ''
 as $$
 declare
   v_valid boolean;
+  v_permitted boolean;
   v_is_staff boolean;
   v_is_provider boolean;
+  v_is_assigned_provider boolean;
   v_is_reporting_tenant boolean;
 begin
   -- A ticket never changes tenant. Without this an actor holding membership in two
@@ -470,18 +550,23 @@ begin
     when 'open'              then new.status in ('assigned', 'cancelled')
     when 'assigned'          then new.status in ('in_progress', 'cancelled')
     when 'in_progress'       then new.status in ('awaiting_approval', 'cancelled')
-    when 'awaiting_approval' then new.status in ('completed', 'cancelled')
+    when 'awaiting_approval' then new.status in ('completed', 'in_progress', 'cancelled')
     else false
   end;
 
   if not v_valid then
     raise exception 'ticket_status_transition_invalid: % -> % is not an allowed transition', old.status, new.status
       using errcode = 'P0001',
-            hint = 'open -> assigned -> in_progress -> awaiting_approval -> completed; cancelled from any non-terminal status; completed and cancelled are terminal.';
+            hint = 'open -> assigned -> in_progress -> awaiting_approval -> completed, plus the rework edge awaiting_approval -> in_progress; cancelled from any non-terminal status; completed and cancelled are terminal.';
   end if;
 
-  -- Trusted server contexts carry no JWT. They are bound by the state machine above
-  -- and by their own server-side authorization, not by the role rules below.
+  -- Trusted server contexts carry no JWT: migrations, w0-l6's service-role fixtures,
+  -- w2-l2's seed script and the job runner. They are bound by the state machine above
+  -- and by their own server-side authorization, not by the role rules below. An
+  -- AUTHENTICATED fixture or seed, by contrast, is held to every rule that follows —
+  -- if one ever starts failing with 42501, this block is working as intended: drive
+  -- the ticket as the role that legitimately owns the edge, or set the row up through
+  -- the service-role client.
   if auth.uid() is null then
     return new;
   end if;
@@ -491,37 +576,47 @@ begin
     public.has_org_role(new.organization_id, array['service_provider']::public.member_role[]),
     false
   );
-  -- coalesce matters: current_tenant_id() returns null for a caller who is not a
-  -- tenant, and an uncoalesced null would make the `completed` guard below evaluate
-  -- to null, which IF treats as false — silently allowing the very transition the
-  -- guard exists to block.
+
+  -- Acceptance criterion 7: a provider drives only its own assigned work. A provider
+  -- who is not the assignee is not "the provider" as far as this ticket is concerned.
+  v_is_assigned_provider := coalesce(
+    v_is_provider
+      and new.assigned_provider_id is not null
+      and new.assigned_provider_id = public.current_provider_id(new.organization_id),
+    false
+  );
+
+  -- coalesce matters throughout: current_tenant_id() and current_provider_id() return
+  -- null for a caller who is neither, and an uncoalesced null would make a guard
+  -- below evaluate to null, which IF treats as false — silently allowing the very
+  -- transition the guard exists to block.
   v_is_reporting_tenant := coalesce(
     new.tenant_id is not null
       and new.tenant_id = public.current_tenant_id(new.organization_id),
     false
   );
 
-  if v_is_provider and not v_is_staff then
-    if not (
-      (old.status = 'assigned'    and new.status = 'in_progress') or
-      (old.status = 'in_progress' and new.status = 'awaiting_approval')
-    ) then
-      raise exception 'ticket_status_transition_forbidden_for_role: a service provider may not drive % -> %', old.status, new.status
-        using errcode = '42501',
-              hint = 'A service provider may only move a ticket assigned to them from assigned to in_progress and from in_progress to awaiting_approval.';
-    end if;
+  -- Per-edge role table, mirroring TRANSITION_ROLES in packages/shared. Every arm
+  -- reads an already-coalesced boolean, so no arm can evaluate to null. The final
+  -- `else false` is unreachable while this table and the edge table above agree; it
+  -- is here so that any future drift between them fails closed rather than open.
+  v_permitted := case
+    when old.status = 'open'              and new.status = 'assigned'          then v_is_staff
+    when old.status = 'open'              and new.status = 'cancelled'         then v_is_staff or v_is_reporting_tenant
+    when old.status = 'assigned'          and new.status = 'in_progress'       then v_is_staff or v_is_assigned_provider
+    when old.status = 'assigned'          and new.status = 'cancelled'         then v_is_staff
+    when old.status = 'in_progress'       and new.status = 'awaiting_approval' then v_is_staff or v_is_assigned_provider
+    when old.status = 'in_progress'       and new.status = 'cancelled'         then v_is_staff
+    when old.status = 'awaiting_approval' and new.status = 'completed'         then v_is_staff or v_is_reporting_tenant
+    when old.status = 'awaiting_approval' and new.status = 'in_progress'       then v_is_staff
+    when old.status = 'awaiting_approval' and new.status = 'cancelled'         then v_is_staff
+    else false
+  end;
 
-    -- Acceptance criterion 7: a provider acts only on their own assigned work.
-    if new.assigned_provider_id is null
-       or new.assigned_provider_id is distinct from public.current_provider_id(new.organization_id) then
-      raise exception 'ticket_status_transition_forbidden_for_role: only the assigned service provider may advance this ticket'
-        using errcode = '42501';
-    end if;
-  end if;
-
-  if new.status = 'completed' and not (v_is_staff or v_is_reporting_tenant) then
-    raise exception 'ticket_status_transition_forbidden_for_role: only a manager or the reporting tenant may complete a ticket'
-      using errcode = '42501';
+  if not v_permitted then
+    raise exception 'ticket_status_transition_forbidden_for_role: this role may not drive % -> %', old.status, new.status
+      using errcode = '42501',
+            hint = 'Only a manager may assign, rework, or cancel an assigned ticket. A service provider may only advance a ticket assigned to them, from assigned to in_progress and from in_progress to awaiting_approval. Only a manager or the reporting tenant may complete. A tenant may cancel only while the ticket is still open.';
   end if;
 
   return new;
@@ -535,8 +630,14 @@ create trigger maintenance_tickets_enforce_transition
 
 
 -- The state machine starts at open. Without this, an insert could be used to jump
--- straight to completed and skip the machine entirely. Authenticated callers only,
--- so seeds and fixtures can still construct tickets in any status directly.
+-- straight to completed and skip the machine entirely.
+--
+-- Authenticated callers only, on purpose: w0-l6's service-role fixtures and w2-l2's
+-- seed script carry no JWT, so they can still construct a ticket in any status
+-- directly and are unaffected by this trigger. A future seed or test that inserts
+-- through an AUTHENTICATED client WILL be rejected here with
+-- ticket_initial_status_invalid — that is this trigger working, not a bug. Create the
+-- ticket as open and walk it through the transitions.
 create or replace function public.enforce_ticket_initial_status()
 returns trigger
 language plpgsql
@@ -576,17 +677,78 @@ create trigger maintenance_tickets_touch_updated_at
   for each row execute function public.touch_updated_at();
 
 
+-- --------------------------------------------------------------------------
+-- 5.5 Profile bootstrap on sign-up (orchestrator addendum 7)
+-- --------------------------------------------------------------------------
+-- The §4 matrix grants profiles read-only and organization_members.profile_id is NOT
+-- NULL, so a user who signs up without a profile row can do nothing at all — yet
+-- there is deliberately no client INSERT policy on profiles, because row creation
+-- must never be driven from a client. The auth system creates the profile instead,
+-- in the same transaction as the signup. w0-l2 adds only a self-scoped UPDATE policy
+-- so a user can later edit their own name and phone.
+--
+-- security definer: profiles has RLS enabled and no INSERT policy, and the row has to
+-- be created regardless of who is — or is not — authenticated at that instant.
+--
+-- profiles.full_name is NOT NULL, so the fallback chain must not be able to yield
+-- null or empty: metadata full_name, then the email local part, then a literal. The
+-- local part is used as a display name here; it is never logged.
+--
+-- Idempotent via on conflict do nothing, so a replayed or retried signup cannot
+-- error. Deliberately NOT wrapped in an exception handler: if the profile cannot be
+-- created the signup should fail loudly rather than mint an authenticated user who
+-- silently cannot do anything.
+create or replace function public.handle_new_auth_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  insert into public.profiles (auth_user_id, full_name, email)
+  values (
+    new.id,
+    coalesce(
+      nullif(btrim(new.raw_user_meta_data ->> 'full_name'), ''),
+      nullif(btrim(split_part(coalesce(new.email, ''), '@', 1)), ''),
+      'New user'
+    ),
+    new.email
+  )
+  on conflict (auth_user_id) do nothing;
+
+  return null;
+end;
+$$;
+
+comment on function public.handle_new_auth_user() is
+  'Creates the public.profiles row for a new auth user. The only write path to profiles; there is no client INSERT policy by design.';
+
+-- Requires the migration to run as a role holding TRIGGER on auth.users, which is the
+-- case for the standard Supabase migration role. Noted in the lane report.
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_auth_user();
+
+
 -- ============================================================================
 -- 6. Onboarding and invitation RPCs (finding 8)
 -- ============================================================================
 -- organizations and organization_members have no client INSERT policy on purpose.
--- These three functions are the only write path, each validating the caller from
--- trusted rows — never from an argument — and each writing an audit row.
+-- These four functions are the only write path for organizations, memberships and
+-- invitations, each validating the caller from trusted rows — never from an argument
+-- — and each writing an audit row.
 --
--- All three return jsonb, so the shape PostgREST hands back is unambiguous:
+-- All four return jsonb, so the shape PostgREST hands back is unambiguous:
 --   create_organization -> { id, name, slug, status, created_at }
 --   invite_member       -> { invitation_id, token, role, expires_at }
 --   accept_invitation   -> { organization_id, member_id, role }
+--   revoke_invitation   -> { invitation_id, status }
+--
+-- revoke_invitation is the one function added to the §5 frozen set after fan-out
+-- (orchestrator ruling 2): an admin who can invite but never revoke is not a
+-- shippable flow.
 
 -- --------------------------------------------------------------------------
 -- 6.1 create_organization
@@ -875,6 +1037,90 @@ comment on function public.accept_invitation(text) is
   'Accepted by the invited user only: the authenticated account email must match the invitation. Activates the membership and consumes the invitation.';
 
 
+-- --------------------------------------------------------------------------
+-- 6.4 revoke_invitation
+-- --------------------------------------------------------------------------
+-- organization_admin of the owning organization only. Takes the invitation id, never
+-- a token, and returns no token: no path through this function can disclose one.
+-- Only a pending invitation can be revoked — revoking an already accepted or revoked
+-- one is a conflict, not a silent no-op, because the caller's view of the world is
+-- stale and they should be told.
+create or replace function public.revoke_invitation(p_invitation_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_profile uuid;
+  v_invitation public.organization_invitations;
+begin
+  if auth.uid() is null then
+    raise exception 'authentication_required: revoke_invitation needs an authenticated session'
+      using errcode = '28000';
+  end if;
+
+  v_profile := public.current_profile_id();
+  if v_profile is null then
+    raise exception 'profile_required: the authenticated user has no profile row'
+      using errcode = '42501';
+  end if;
+
+  if p_invitation_id is null then
+    raise exception 'invitation_id_required: an invitation id is required'
+      using errcode = '22023';
+  end if;
+
+  select i.* into v_invitation
+  from public.organization_invitations i
+  where i.id = p_invitation_id
+  for update;
+
+  -- "Does not exist" and "exists but is not yours" deliberately return the same
+  -- error, so this is not a cross-organization invitation oracle. Authorization is
+  -- checked before status, for the same reason.
+  if v_invitation.id is null
+     or not coalesce(
+          public.has_org_role(
+            v_invitation.organization_id,
+            array['organization_admin']::public.member_role[]
+          ),
+          false
+        ) then
+    raise exception 'invitation_revoke_forbidden: only an organization_admin of the owning organization may revoke an invitation'
+      using errcode = '42501';
+  end if;
+
+  if v_invitation.status <> 'pending' then
+    raise exception 'invitation_not_pending: only a pending invitation can be revoked'
+      using errcode = 'P0001';
+  end if;
+
+  update public.organization_invitations
+     set status = 'revoked'
+   where id = v_invitation.id;
+
+  -- Role only. The invitee's email address is personal data and never enters an
+  -- audit row, a log line or an error message.
+  perform public.log_audit(
+    'member.invitation_revoked',
+    'organization_invitation',
+    v_invitation.id,
+    jsonb_build_object('role', v_invitation.role),
+    v_invitation.organization_id
+  );
+
+  return jsonb_build_object(
+    'invitation_id', v_invitation.id,
+    'status', 'revoked'
+  );
+end;
+$$;
+
+comment on function public.revoke_invitation(uuid) is
+  'organization_admin only. Revokes a pending invitation by id. Never accepts or returns a plaintext token.';
+
+
 -- ============================================================================
 -- 7. Execute grants
 -- ============================================================================
@@ -885,13 +1131,16 @@ revoke all on function public.log_audit(text, text, uuid, jsonb, uuid) from publ
 revoke all on function public.create_organization(text, text) from public;
 revoke all on function public.invite_member(uuid, text, public.member_role) from public;
 revoke all on function public.accept_invitation(text) from public;
+revoke all on function public.revoke_invitation(uuid) from public;
 
 grant execute on function public.log_audit(text, text, uuid, jsonb, uuid) to authenticated, service_role;
 grant execute on function public.create_organization(text, text) to authenticated, service_role;
 grant execute on function public.invite_member(uuid, text, public.member_role) to authenticated, service_role;
 grant execute on function public.accept_invitation(text) to authenticated, service_role;
+grant execute on function public.revoke_invitation(uuid) to authenticated, service_role;
 
--- The five trigger functions above are left at their default grants on purpose.
--- They return `trigger` and error out unless invoked from a trigger context, so a
--- direct call buys an attacker nothing, and narrowing their grants is not worth the
--- risk of interfering with trigger execution.
+-- The trigger functions above are left at their default grants on purpose. They
+-- return `trigger` and error out unless invoked from a trigger context, so a direct
+-- call buys an attacker nothing, and narrowing their grants is not worth the risk of
+-- interfering with trigger execution. public.handle_new_auth_user() in particular
+-- must stay callable by the auth system.

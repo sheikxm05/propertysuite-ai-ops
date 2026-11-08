@@ -1,26 +1,27 @@
 /**
  * Client type aliases.
  *
- * `packages/shared/types/database.ts` (W0-L4) will export a generated `Database` type,
- * but §5.4 does not freeze that export's name or module path, so this lane cannot bind
- * to it without guessing. Every client in `lib/supabase/**` is therefore typed through
- * the aliases below. When the generated type lands, tightening it is a one-line change
- * in this file and nowhere else.
+ * Every Supabase client in `lib/supabase/**` is typed through one of the two aliases
+ * below, and both are bound to the generated `Database` type from
+ * `packages/shared/types/database.ts`. Routing it through this file rather than naming
+ * `SupabaseClient<Database>` at thirty call sites means a schema regeneration is a
+ * one-line change here.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+
+import type { Database } from '@/lib/shared';
 
 /**
  * A request-scoped Supabase client carrying the caller's identity. Row Level Security
  * is in force: this is the client every route handler should use.
  */
-export type AppSupabaseClient = SupabaseClient;
+export type AppSupabaseClient = SupabaseClient<Database>;
 
 /**
  * A client authenticated with the service-role key. **Bypasses Row Level Security.**
- * Distinct from `AppSupabaseClient` so that a privileged client cannot be passed where
- * a caller-scoped one is expected without the type being written out deliberately.
+ * Structurally identical to `AppSupabaseClient`, but named separately so that handing a
+ * privileged client to something expecting a caller-scoped one has to be written out
+ * deliberately and shows up in review.
  */
-export type PrivilegedSupabaseClient = SupabaseClient & {
-  readonly __privileged?: never;
-};
+export type PrivilegedSupabaseClient = SupabaseClient<Database>;
