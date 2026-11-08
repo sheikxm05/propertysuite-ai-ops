@@ -4,7 +4,11 @@ Companion to `implementation-plan.md`. That document states _what_ is built and 
 This one states _who builds which file_, so six agents can run concurrently without
 ever touching the same path.
 
-**Status: plan only. No code written.**
+**Status: in execution.** Wave 0 stage 1 (`w0-l1`) and lanes `w0-l2`, `w0-l3`, `w0-l4`
+are delivered and committed; `w0-l5` and `w0-l6` are in flight. Wave 0's gate is NOT
+met: both migrations are unexecuted against a live Postgres because Docker is down,
+and `w0-l6`'s isolation suite is the required proof. Freeze amendments are logged in
+§5.8, carried-forward gaps in §5.9.
 
 ---
 
