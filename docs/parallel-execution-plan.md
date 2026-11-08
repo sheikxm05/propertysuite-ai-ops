@@ -519,6 +519,35 @@ early rather than at the end of a wave.
 | **Parameter shadowed by a same-named column** (caught before it shipped)                                                  | Would have been a silent no-op                                                               | In a SQL-language function a column name outranks a same-named parameter, so `where u.property_id = property_id` compares the column to itself and is always true. It passes review, passes `create function`, and passes any probe that happens to send a consistent pair. Only a deliberately mismatched pair reveals it |
 | **Bare `$$` dollar-quoting collapses through a shell heredoc**                                                            | `as $$` silently became `as $`                                                               | Not a code defect but a toolchain hazard: any lane authoring SQL through a heredoc must use named tags (`$fn$`, `$ubp$`). Detected only by tallying dollar-tag counts before and after an edit                                                                                                                             |
 
+### 5.9b Finding 11 — TRUNCATE bypasses RLS (closed, with one residual)
+
+The most serious defect found in the project, and the one that best argues for applying
+migrations early.
+
+`authenticated` held `TRUNCATE` on **all 15 tenant-scoped tables**. TRUNCATE ignores
+row-level security entirely, so none of the 69 policies were ever in the path. Proven on
+the live database before the fix: a principal with **no membership in any organization**
+truncated `audit_logs` to zero rows. Any authenticated user, including a brand-new
+signup, could have erased every organization's properties, units, tenants, tenancies,
+tickets, documents, memberships, profiles and the audit trail in fifteen statements.
+
+Why every prior check missed it: UPDATE and DELETE were explicitly revoked and verified,
+and §5.9a had recorded TRUNCATE for `maintenance_activities` only — the one table where
+0003's trigger happens to cover it. TRUNCATE arrives via Supabase's default privileges
+and was never enumerated. No policy review could have found it, because the defect is
+the absence of a policy's relevance, not a policy's content.
+
+Closed in 0002 by a `pg_class` loop (not a hand-list, and widened to `relkind in ('r','p')`),
+plus a `pg_default_acl` enumeration to stop later tables inheriting it, plus a §7
+assertion testing the **effective** privilege via `has_table_privilege` so a grant
+inherited through `PUBLIC` or role membership is also caught. The assertion was
+negative-tested by re-granting the privilege and confirming it raises.
+
+**Residual, open:** `ALTER DEFAULT PRIVILEGES` is per-grantor-role, and `supabase_admin`
+is not alterable by the migration role on this project. The migration emits a warning
+and the standing requirement applies: **any migration that creates a table in `public`
+must re-run the §4a revoke loop.** `storage.objects` was measured and is unaffected.
+
 ### 5.9 Known gaps carried forward
 
 Owner `w2-l3` in `supabase/migrations/0004_security_remediation.sql` unless stated.
