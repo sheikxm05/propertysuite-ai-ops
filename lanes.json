@@ -20,7 +20,8 @@
       "docs/agent-briefings.md",
       "docs/parallel-execution-plan.md",
       "docs/implementation-plan.md",
-      "docs/implementation-plan.blueprint.md"
+      "docs/implementation-plan.blueprint.md",
+      "docs/ai-prompts/**"
     ]
   },
   "waves": [
@@ -49,46 +50,73 @@
             "app/globals.css",
             "app/not-found.tsx",
             "app/error.tsx",
+            "app/page.tsx",
             "app/(dashboard)/layout.tsx",
+            "scripts/scan-client-bundle.mjs",
             "components/ui/**",
             "components/shell/**",
             "config/**",
             "features/*/nav.ts",
             "features/*/widget.tsx"
           ],
-          "readonly": ["docs/**"],
+          "readonly": [
+            "docs/**"
+          ],
           "exitGate": "Empty app builds; CI green; ownership validator rejects a deliberate cross-lane edit; no secret reachable from the client bundle."
         },
         {
           "id": "w0-l2",
           "title": "Migration 0002 — RLS helpers and policy matrix",
           "dependsOn": [],
-          "owns": ["supabase/migrations/0002_rls_hardening.sql"],
-          "readonly": ["supabase/migrations/0001_initial_schema.sql", "docs/**"],
+          "owns": [
+            "supabase/migrations/0002_rls_hardening.sql"
+          ],
+          "readonly": [
+            "supabase/migrations/0001_initial_schema.sql",
+            "docs/**"
+          ],
           "exitGate": "Applies to a fresh database, idempotent on re-run; the w0-l6 isolation suite turns green against it."
         },
         {
           "id": "w0-l3",
           "title": "Migration 0003 — triggers, RPCs, schema fixes, job table",
           "dependsOn": [],
-          "owns": ["supabase/migrations/0003_domain_integrity.sql"],
-          "readonly": ["supabase/migrations/0001_initial_schema.sql", "docs/**"],
+          "owns": [
+            "supabase/migrations/0003_domain_integrity.sql"
+          ],
+          "readonly": [
+            "supabase/migrations/0001_initial_schema.sql",
+            "docs/**"
+          ],
           "exitGate": "Illegal ticket transitions and activity mutations rejected at the database level, proven by w0-l6 tests."
         },
         {
           "id": "w0-l4",
           "title": "Shared contracts package",
           "dependsOn": [],
-          "owns": ["packages/shared/**"],
-          "readonly": ["supabase/migrations/**", "docs/**"],
+          "owns": [
+            "packages/shared/**"
+          ],
+          "readonly": [
+            "supabase/migrations/**",
+            "docs/**"
+          ],
           "exitGate": "packages/shared typechecks standalone; unit tests pass; no feature lane needs to add an export."
         },
         {
           "id": "w0-l5",
           "title": "Runtime security library and the handler wrapper",
-          "dependsOn": ["w0-l4"],
-          "owns": ["lib/**", "middleware.ts"],
-          "readonly": ["packages/shared/**", "docs/**"],
+          "dependsOn": [
+            "w0-l4"
+          ],
+          "owns": [
+            "lib/**",
+            "middleware.ts"
+          ],
+          "readonly": [
+            "packages/shared/**",
+            "docs/**"
+          ],
           "exitGate": "A probe route returns the exact frozen envelope for 401, 403, 404, 409, 422, 429 and 500."
         },
         {
@@ -105,7 +133,11 @@
             "scripts/reset-db.mjs",
             "scripts/make-jwts.mjs"
           ],
-          "readonly": ["supabase/migrations/**", "packages/shared/**", "docs/**"],
+          "readonly": [
+            "supabase/migrations/**",
+            "packages/shared/**",
+            "docs/**"
+          ],
           "exitGate": "HARD GATE. Full isolation suite green in CI and every policy in the matrix exercised by at least one passing assertion. Blocks all of wave 1."
         }
       ]
@@ -118,9 +150,19 @@
         {
           "id": "w1-l1",
           "title": "Identity, organizations, invitations",
-          "dependsOn": ["w0-l1", "w0-l2", "w0-l3", "w0-l4", "w0-l5", "w0-l6"],
+          "dependsOn": [
+            "w0-l1",
+            "w0-l2",
+            "w0-l3",
+            "w0-l4",
+            "w0-l5",
+            "w0-l6"
+          ],
           "owns": [
             "app/(auth)/**",
+            "app/page.tsx",
+            "app/(dashboard)/layout.tsx",
+            "app/(dashboard)/dashboard/**",
             "app/(dashboard)/organization/**",
             "app/(dashboard)/members/**",
             "app/api/v1/organizations/**",
@@ -128,26 +170,52 @@
             "features/organizations/**",
             "tests/organizations/**"
           ],
-          "readonly": ["packages/shared/**", "lib/**", "config/**", "supabase/migrations/**", "docs/**"],
+          "readonly": [
+            "packages/shared/**",
+            "lib/**",
+            "config/**",
+            "supabase/migrations/**",
+            "docs/**"
+          ],
           "exitGate": "Invitation lifecycle tested; non-admin cannot invite; an accepted member receives exactly their role's visibility."
         },
         {
           "id": "w1-l2",
           "title": "Properties and units",
-          "dependsOn": ["w0-l1", "w0-l2", "w0-l3", "w0-l4", "w0-l5", "w0-l6"],
+          "dependsOn": [
+            "w0-l1",
+            "w0-l2",
+            "w0-l3",
+            "w0-l4",
+            "w0-l5",
+            "w0-l6"
+          ],
           "owns": [
             "app/api/v1/properties/**",
             "app/(dashboard)/properties/**",
             "features/properties/**",
             "tests/properties/**"
           ],
-          "readonly": ["packages/shared/**", "lib/**", "config/**", "supabase/migrations/**", "docs/**"],
+          "readonly": [
+            "packages/shared/**",
+            "lib/**",
+            "config/**",
+            "supabase/migrations/**",
+            "docs/**"
+          ],
           "exitGate": "Contracts in api-contracts.md implemented with the standard envelope; manager writes, owner read-only, tenant sees only leased property, provider sees only ticket-linked property."
         },
         {
           "id": "w1-l3",
           "title": "Tenants and tenancies",
-          "dependsOn": ["w0-l1", "w0-l2", "w0-l3", "w0-l4", "w0-l5", "w0-l6"],
+          "dependsOn": [
+            "w0-l1",
+            "w0-l2",
+            "w0-l3",
+            "w0-l4",
+            "w0-l5",
+            "w0-l6"
+          ],
           "owns": [
             "app/api/v1/tenants/**",
             "app/api/v1/tenancies/**",
@@ -158,26 +226,52 @@
             "tests/tenants/**",
             "tests/tenancies/**"
           ],
-          "readonly": ["packages/shared/**", "lib/**", "config/**", "supabase/migrations/**", "docs/**"],
+          "readonly": [
+            "packages/shared/**",
+            "lib/**",
+            "config/**",
+            "supabase/migrations/**",
+            "docs/**"
+          ],
           "exitGate": "A signed-in tenant sees only their own tenancy; cross-tenant PII read denied; overlapping active tenancy on one unit rejected."
         },
         {
           "id": "w1-l4",
           "title": "Maintenance workflow",
-          "dependsOn": ["w0-l1", "w0-l2", "w0-l3", "w0-l4", "w0-l5", "w0-l6"],
+          "dependsOn": [
+            "w0-l1",
+            "w0-l2",
+            "w0-l3",
+            "w0-l4",
+            "w0-l5",
+            "w0-l6"
+          ],
           "owns": [
             "app/api/v1/maintenance/**",
             "app/(dashboard)/maintenance/**",
             "features/maintenance/**",
             "tests/maintenance/**"
           ],
-          "readonly": ["packages/shared/**", "lib/**", "config/**", "supabase/migrations/**", "docs/**"],
+          "readonly": [
+            "packages/shared/**",
+            "lib/**",
+            "config/**",
+            "supabase/migrations/**",
+            "docs/**"
+          ],
           "exitGate": "Every illegal transition rejected; provider cannot read or touch unassigned work; every transition leaves exactly one activity row."
         },
         {
           "id": "w1-l5",
           "title": "AI maintenance intake",
-          "dependsOn": ["w0-l1", "w0-l2", "w0-l3", "w0-l4", "w0-l5", "w0-l6"],
+          "dependsOn": [
+            "w0-l1",
+            "w0-l2",
+            "w0-l3",
+            "w0-l4",
+            "w0-l5",
+            "w0-l6"
+          ],
           "owns": [
             "services/ai/**",
             "app/api/v1/ai/**",
@@ -185,14 +279,27 @@
             "tests/ai/**",
             "evals/**"
           ],
-          "readonly": ["packages/shared/**", "lib/**", "config/**", "docs/ai-prompts/**", "docs/**"],
+          "readonly": [
+            "packages/shared/**",
+            "lib/**",
+            "config/**",
+            "docs/ai-prompts/**",
+            "docs/**"
+          ],
           "requiresSecret": "ANTHROPIC_API_KEY",
           "exitGate": "Eval set passes including prompt injection and malformed JSON; no model output path can reach a privileged action."
         },
         {
           "id": "w1-l6",
           "title": "Documents, extraction, job runner",
-          "dependsOn": ["w0-l1", "w0-l2", "w0-l3", "w0-l4", "w0-l5", "w0-l6"],
+          "dependsOn": [
+            "w0-l1",
+            "w0-l2",
+            "w0-l3",
+            "w0-l4",
+            "w0-l5",
+            "w0-l6"
+          ],
           "owns": [
             "app/api/v1/documents/**",
             "app/(dashboard)/documents/**",
@@ -201,7 +308,14 @@
             "services/extraction/**",
             "tests/documents/**"
           ],
-          "readonly": ["packages/shared/**", "lib/**", "config/**", "services/ai/**", "docs/ai-prompts/**", "docs/**"],
+          "readonly": [
+            "packages/shared/**",
+            "lib/**",
+            "config/**",
+            "services/ai/**",
+            "docs/ai-prompts/**",
+            "docs/**"
+          ],
           "exitGate": "Nothing verified without a human action; a permanently failing job dead-letters; a duplicate enqueue processes once."
         }
       ]
@@ -215,28 +329,65 @@
         {
           "id": "w2-l1",
           "title": "End-to-end suite",
-          "dependsOn": ["w1-l1", "w1-l2", "w1-l3", "w1-l4", "w1-l5", "w1-l6"],
-          "owns": ["tests/e2e/**", "tests/_harness/e2e/**"],
-          "readonly": ["app/**", "features/**", "packages/shared/**", "lib/**", "docs/**"],
+          "dependsOn": [
+            "w1-l1",
+            "w1-l2",
+            "w1-l3",
+            "w1-l4",
+            "w1-l5",
+            "w1-l6"
+          ],
+          "owns": [
+            "tests/e2e/**",
+            "tests/_harness/e2e/**"
+          ],
+          "readonly": [
+            "app/**",
+            "features/**",
+            "packages/shared/**",
+            "lib/**",
+            "docs/**"
+          ],
           "exitGate": "The ten-step scenario in test-plan.md passes, including the cross-organization denial assertion; CI smoke subset under five minutes."
         },
         {
           "id": "w2-l2",
           "title": "Demo seed data and walkthrough",
-          "dependsOn": ["w1-l1", "w1-l2", "w1-l3", "w1-l4", "w1-l5", "w1-l6"],
-          "owns": ["scripts/seed-demo.mjs", "fixtures/demo/**", "docs/demo-walkthrough.md"],
-          "readonly": ["packages/shared/**", "supabase/migrations/**", "docs/**"],
+          "dependsOn": [
+            "w1-l1",
+            "w1-l2",
+            "w1-l3",
+            "w1-l4",
+            "w1-l5",
+            "w1-l6"
+          ],
+          "owns": [
+            "scripts/seed-demo.mjs",
+            "fixtures/demo/**",
+            "docs/demo-walkthrough.md"
+          ],
+          "readonly": [
+            "packages/shared/**",
+            "supabase/migrations/**",
+            "docs/**"
+          ],
           "exitGate": "Idempotent re-seed produces two organizations, ten principals, tickets in every status, and one verified plus one pending document."
         },
         {
           "id": "w2-l3",
           "title": "Security audit and remediation (sole feature-code writer)",
-          "dependsOn": ["w1-l1", "w1-l2", "w1-l3", "w1-l4", "w1-l5", "w1-l6"],
+          "dependsOn": [
+            "w1-l1",
+            "w1-l2",
+            "w1-l3",
+            "w1-l4",
+            "w1-l5",
+            "w1-l6"
+          ],
           "owns": [
             "docs/security-audit.md",
             "supabase/migrations/0004_security_remediation.sql",
             "app/**",
-            "!app/(dashboard)/page.tsx",
             "!app/(dashboard)/dashboard/**",
             "!app/api/health/**",
             "features/**",
@@ -246,13 +397,23 @@
             "!lib/observability/**",
             "!lib/rate-limit/**"
           ],
-          "readonly": ["tests/**", "docs/**"],
+          "readonly": [
+            "tests/**",
+            "docs/**"
+          ],
           "exitGate": "Every line of security-checklist.md has recorded evidence; adversarial IDOR, organization-injection, signed-URL replay and prompt-injection passes all clean; every suite re-run green."
         },
         {
           "id": "w2-l4",
           "title": "Observability, performance, resilience",
-          "dependsOn": ["w1-l1", "w1-l2", "w1-l3", "w1-l4", "w1-l5", "w1-l6"],
+          "dependsOn": [
+            "w1-l1",
+            "w1-l2",
+            "w1-l3",
+            "w1-l4",
+            "w1-l5",
+            "w1-l6"
+          ],
           "owns": [
             "lib/observability/**",
             "lib/rate-limit/**",
@@ -260,27 +421,50 @@
             "app/api/health/**",
             "docs/runbook.md"
           ],
-          "readonly": ["lib/**", "app/**", "services/**", "docs/**"],
+          "readonly": [
+            "lib/**",
+            "app/**",
+            "services/**",
+            "docs/**"
+          ],
           "exitGate": "Correlation IDs traced end to end including into job rows; health and readiness endpoints live; dead-letter alerting in place; runbook written."
         },
         {
           "id": "w2-l5",
           "title": "Role dashboards and UX completion",
-          "dependsOn": ["w1-l1", "w1-l2", "w1-l3", "w1-l4", "w1-l5", "w1-l6"],
+          "dependsOn": [
+            "w1-l1",
+            "w1-l2",
+            "w1-l3",
+            "w1-l4",
+            "w1-l5",
+            "w1-l6"
+          ],
           "owns": [
-            "app/(dashboard)/page.tsx",
             "app/(dashboard)/dashboard/**",
             "components/shell/**",
             "components/ui/**",
             "config/**"
           ],
-          "readonly": ["features/**", "packages/shared/**", "lib/**", "docs/**"],
+          "readonly": [
+            "features/**",
+            "packages/shared/**",
+            "lib/**",
+            "docs/**"
+          ],
           "exitGate": "Five role-specific dashboards compose the six Wave 1 widgets; every surface has empty, loading and error states; accessibility pass clean."
         },
         {
           "id": "w2-l6",
           "title": "Deployment and documentation close-out",
-          "dependsOn": ["w1-l1", "w1-l2", "w1-l3", "w1-l4", "w1-l5", "w1-l6"],
+          "dependsOn": [
+            "w1-l1",
+            "w1-l2",
+            "w1-l3",
+            "w1-l4",
+            "w1-l5",
+            "w1-l6"
+          ],
           "owns": [
             "README.md",
             "docs/**",
@@ -292,7 +476,9 @@
             "!docs/parallel-execution-plan.md",
             ".github/workflows/deploy.yml"
           ],
-          "readonly": ["**"],
+          "readonly": [
+            "**"
+          ],
           "exitGate": "README quick start verified from a clean clone; api-contracts.md reconciled with shipped routes; backlog closed out; release-gate evidence recorded."
         }
       ]

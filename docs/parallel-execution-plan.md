@@ -1,7 +1,7 @@
 # Parallel Execution Plan — 6 Agents, Zero Overlap
 
-Companion to `implementation-plan.md`. That document states *what* is built and why.
-This one states *who builds which file*, so six agents can run concurrently without
+Companion to `implementation-plan.md`. That document states _what_ is built and why.
+This one states _who builds which file_, so six agents can run concurrently without
 ever touching the same path.
 
 **Status: plan only. No code written.**
@@ -19,7 +19,7 @@ construction. Five mechanisms do that:
    stop and report it as a planning defect — it must never edit across the boundary.
 2. **Interface freeze (§5).** Every cross-lane contract — dependency list, handler
    wrapper signature, error envelope, schema export names, SQL helper signatures, route
-   paths — is fixed in writing *before* fan-out. Agents code against this document, not
+   paths — is fixed in writing _before_ fan-out. Agents code against this document, not
    against each other's output, so they do not need to wait or negotiate.
 3. **Pre-stubbed integration points.** Wave 0 Lane 1 creates every shared file that
    would otherwise be a merge point — nav registry, dashboard widget slots, route group
@@ -59,15 +59,29 @@ within a wave, merge order is irrelevant because the diffs are disjoint by const
 gate passes before the next wave starts. Three waves, six lanes each, eighteen agent
 tasks, ~112 subtasks.
 
+**Correction found at pre-flight — W0-L1 runs solo first.** Wave 0 is parallel for
+_authorship_ but not for _verification_: `w0-l4`, `w0-l5` and `w0-l6` can write code
+against the §5 freeze without waiting for anyone, but none of them can execute
+`npm test` until `w0-l1` has created `package.json` and installed the frozen dependency
+list. Launching all six at once therefore yields three lanes that cannot prove their own
+exit gates. Run `w0-l1` alone first — it is short, being scaffold and install — then
+launch the remaining five concurrently. Execution is four stages, not three:
+`w0-l1` → `w0-l2…l6` (5 parallel) → Wave 1 (6 parallel) → Wave 2 (6 parallel).
+
+Separately, `git init` and the initial commit are **pre-wave** work: six lane branches
+and worktrees cannot be created before the repository exists, so assigning `git init` to
+a lane agent was a sequencing defect. The repository is initialized and the planning
+artifacts are committed on `main`.
+
 ---
 
 ## 1. Wave overview
 
-| Wave | Theme | Lanes | Gate to exit |
-|------|-------|-------|--------------|
-| 0 | Contracts, security core, test infrastructure | 6 | Migrations apply clean; RLS isolation suite passes; typecheck and lint green |
-| 1 | Six feature verticals | 6 | Every feature's authorization and unit tests pass; ownership check clean |
-| 2 | Cross-cutting completion and demo | 6 | Every release gate in `test-plan.md` green |
+| Wave | Theme                                         | Lanes | Gate to exit                                                                 |
+| ---- | --------------------------------------------- | ----- | ---------------------------------------------------------------------------- |
+| 0    | Contracts, security core, test infrastructure | 6     | Migrations apply clean; RLS isolation suite passes; typecheck and lint green |
+| 1    | Six feature verticals                         | 6     | Every feature's authorization and unit tests pass; ownership check clean     |
+| 2    | Cross-cutting completion and demo             | 6     | Every release gate in `test-plan.md` green                                   |
 
 No feature work exists in Wave 0, and no shared contract changes in Wave 1. That
 separation is what keeps Wave 1 collision-free.
@@ -77,6 +91,7 @@ separation is what keeps Wave 1 collision-free.
 ## 2. Wave 0 — Contracts and security core
 
 ### W0-L1 — Repository scaffold, tooling, integration stubs
+
 **Depends on:** nothing. **Owns:**
 `package.json`, `package-lock.json`, `tsconfig.json`, `next.config.ts`,
 `tailwind.config.ts`, `postcss.config.mjs`, `eslint.config.mjs`, `.prettierrc`,
@@ -86,6 +101,7 @@ separation is what keeps Wave 1 collision-free.
 `config/nav.registry.ts`, `config/dashboard.slots.ts`
 
 **Subtasks**
+
 1. `git init`; initial commit; create `lane/*` branch scaffolding convention in the README.
 2. Scaffold Next.js App Router + TypeScript strict; path aliases `@/*`.
 3. Install the **entire** frozen dependency list from §5.1 in one pass. No other lane ever edits `package.json`.
@@ -101,11 +117,13 @@ separation is what keeps Wave 1 collision-free.
 ---
 
 ### W0-L2 — Migration `0002`: RLS helpers and policy matrix
+
 **Depends on:** nothing (frozen schema in `0001` plus the §4 matrix in `implementation-plan.md`).
 **Owns:** `supabase/migrations/0002_rls_hardening.sql` — this file only.
 **Reads:** `0001_initial_schema.sql`, `implementation-plan.md` §3–4.
 
 **Subtasks**
+
 1. `enable row level security` on `organizations` and `profiles` (currently missing — the two platform-wide leaks).
 2. Drop all baseline `is_org_member`-only policies by name.
 3. Create the six helper functions with the exact signatures in §5.3, all `stable security definer set search_path = ''`.
@@ -121,10 +139,12 @@ separation is what keeps Wave 1 collision-free.
 ---
 
 ### W0-L3 — Migration `0003`: triggers, RPCs, schema fixes, job table
+
 **Depends on:** nothing. Disjoint file from W0-L2 by design, so both run concurrently.
 **Owns:** `supabase/migrations/0003_domain_integrity.sql` — this file only.
 
 **Subtasks**
+
 1. Immutability trigger blocking `UPDATE`/`DELETE` on `maintenance_activities`.
 2. Ticket transition trigger enforcing the §4 state machine, raising `P0001` on an illegal transition.
 3. Trigger asserting `assigned_provider_id` shares the ticket's `organization_id`.
@@ -140,17 +160,19 @@ separation is what keeps Wave 1 collision-free.
 ---
 
 ### W0-L4 — Shared contracts package
+
 **Depends on:** nothing. **Owns:** `packages/shared/**` only —
 `schemas/{organization,property,unit,tenant,tenancy,maintenance,document,ai}.ts`,
 `constants/{roles,ticket-status,categories,errors}.ts`, `types/database.ts`, `index.ts`.
 
 **Subtasks**
+
 1. Zod schemas with the exact export names frozen in §5.4 — one file per domain, no barrel edits by other lanes.
 2. Request and response schemas for every route in §5.5, matching `api-contracts.md`.
 3. Enum constants mirroring the Postgres enums; a compile-time check that they stay in sync.
 4. The error-code union and the `ApiError` envelope type from §5.2.
 5. Ticket transition table as data (`ALLOWED_TRANSITIONS`) plus `canTransition(from, to, role)` as a pure function, so both the UI and the server import one rule set.
-6. Deterministic priority policy function — the model only *suggests* priority; this decides it.
+6. Deterministic priority policy function — the model only _suggests_ priority; this decides it.
 7. Generated `types/database.ts` from the local schema; regeneration script documented.
 8. Unit tests for every schema's accept and reject cases, and for `canTransition`.
 
@@ -159,12 +181,14 @@ separation is what keeps Wave 1 collision-free.
 ---
 
 ### W0-L5 — Runtime security library and the handler wrapper
+
 **Depends on:** W0-L4 contracts (by frozen signature, not by waiting). **Owns:** `lib/**` —
 `supabase/{browser,server,service-role}.ts`, `auth/{session,roles,authorize}.ts`,
 `api/{with-handler,errors,responses}.ts`, `audit/write.ts`, `rate-limit/index.ts`,
 `observability/{logger,correlation}.ts`, `env.ts`, `middleware.ts`
 
 **Subtasks**
+
 1. Zod-parsed `env.ts` failing fast at boot; service-role key only readable in server-only modules.
 2. Supabase browser client, server client (cookie-based, `@supabase/ssr`), and an isolated service-role client.
 3. `getSession()` and `requireSession()`; Next.js middleware protecting the dashboard route group.
@@ -180,11 +204,13 @@ separation is what keeps Wave 1 collision-free.
 ---
 
 ### W0-L6 — Test infrastructure and the RLS isolation suite
+
 **Depends on:** nothing — written **test-first** against the frozen §4 matrix, so it runs red until `0002`/`0003` merge.
 **Owns:** `vitest.config.ts`, `playwright.config.ts`, `tests/_harness/**`, `tests/rls/**`,
 `scripts/{supabase-local,reset-db,make-jwts}.mjs`
 
 **Subtasks**
+
 1. Local Supabase stack scripts: start, migrate, reset, teardown via Docker.
 2. JWT factory creating real authenticated sessions for 10 principals — five roles × two organizations.
 3. Fixture builder seeding two organizations with deliberately similar data through the service-role client.
@@ -207,7 +233,9 @@ Every lane follows the same shape and touches nothing outside it:
 All six **read** `packages/shared`, `lib`, and the migrations. None of them writes there.
 
 ### W1-L1 — Identity, organizations, invitations
+
 **Owns:** `app/(auth)/**`, `app/api/v1/organizations/**`, `app/api/v1/members/**`, `features/organizations/**`, `tests/organizations/**`
+
 1. Sign-in, sign-out, session refresh, auth error states.
 2. Profile bootstrap on first sign-in.
 3. Organization creation via the `create_organization` RPC.
@@ -217,7 +245,9 @@ All six **read** `packages/shared`, `lib`, and the migrations. None of them writ
 7. Tests: invitation lifecycle; non-admin cannot invite; accepted member receives exactly their role's visibility.
 
 ### W1-L2 — Properties and units
+
 **Owns:** `app/api/v1/properties/**`, `app/(dashboard)/properties/**`, `features/properties/**`, `tests/properties/**`
+
 1. Property list with cursor pagination, detail, create, update, archive.
 2. Unit create, list, update, status transitions.
 3. Owner and manager association, organization-consistency enforced.
@@ -227,7 +257,9 @@ All six **read** `packages/shared`, `lib`, and the migrations. None of them writ
 7. Tests: manager can write, owner is read-only, tenant sees only leased property, provider sees only ticket-linked property.
 
 ### W1-L3 — Tenants and tenancies
+
 **Owns:** `app/api/v1/tenants/**`, `app/api/v1/tenancies/**`, `app/(dashboard)/tenancies/**`, `features/tenants/**`, `features/tenancies/**`, `tests/tenancies/**`
+
 1. Tenant records; optional linkage to an application user.
 2. Tenancy create and update: date ordering, rent, currency, contract number.
 3. Lifecycle transitions draft → active → expired/terminated, audited.
@@ -237,7 +269,9 @@ All six **read** `packages/shared`, `lib`, and the migrations. None of them writ
 7. Tests: cross-tenant PII read denied; overlapping active tenancy on one unit rejected.
 
 ### W1-L4 — Maintenance workflow
+
 **Owns:** `app/api/v1/maintenance/**`, `app/(dashboard)/maintenance/**`, `features/maintenance/**`, `tests/maintenance/**`
+
 1. Ticket creation restricted to a unit the caller is authorized for.
 2. List and detail views, role-filtered, with status and priority facets.
 3. Manager triage: priority via the deterministic policy function, assignment within the organization.
@@ -249,7 +283,9 @@ All six **read** `packages/shared`, `lib`, and the migrations. None of them writ
 9. Tests: every illegal transition rejected; provider cannot read or touch unassigned work; every transition leaves exactly one activity row.
 
 ### W1-L5 — AI maintenance intake
+
 **Owns:** `services/ai/**`, `app/api/v1/ai/**`, `features/ai-intake/**`, `tests/ai/**`, `evals/maintenance/**`
+
 1. Provider-neutral adapter; `classify()` returns a validated object or throws. Model id from env, never hardcoded at a call site.
 2. Versioned prompt and JSON schema in source, from `docs/ai-prompts/maintenance-classification.md`.
 3. Untrusted-content fencing as the adapter's only input path — user and document text never enter the system role.
@@ -262,7 +298,9 @@ All six **read** `packages/shared`, `lib`, and the migrations. None of them writ
 10. Eval set: HVAC correct, plumbing correct, missing context asks for clarification, prompt injection treated as inert data, malformed JSON rejected, model output provably unable to reach a privileged action.
 
 ### W1-L6 — Documents, extraction, job runner
+
 **Owns:** `app/api/v1/documents/**`, `app/(dashboard)/documents/**`, `features/documents/**`, `services/workers/**`, `services/extraction/**`, `tests/documents/**`
+
 1. `POST /documents/upload-url` issuing a 60-second signed URL on the frozen path convention.
 2. MIME, extension, magic-byte and size validation; rejection paths.
 3. Job runner over the `jobs` table: claim with `for update skip locked`, bounded exponential backoff, dead-letter status, idempotency key honoured.
@@ -284,49 +322,61 @@ Feature lanes are closed. Ownership of feature paths transfers to W2-L3, which i
 to the paths listed under it.
 
 ### W2-L1 — End-to-end suite
+
 **Owns:** `tests/e2e/**`, `tests/_harness/e2e/**`
+
 1. Page objects per role. 2. The ten-step scenario from `test-plan.md`. 3. The
-cross-organization denial beat as an assertion, not a screenshot. 4. AI intake happy
-path plus clarification path. 5. Document upload through verification. 6. CI smoke
-subset under five minutes.
+   cross-organization denial beat as an assertion, not a screenshot. 4. AI intake happy
+   path plus clarification path. 5. Document upload through verification. 6. CI smoke
+   subset under five minutes.
 
 ### W2-L2 — Demo seed data and walkthrough
+
 **Owns:** `scripts/seed-demo.mjs`, `fixtures/demo/**`, `docs/demo-walkthrough.md`
+
 1. Two organizations with deliberately similar-looking portfolios. 2. One user per role
-per organization, documented credentials. 3. Realistic Dubai properties, units,
-tenancies in several lifecycle states. 4. Tickets across every status, with activity
-history. 5. Two sample tenancy PDFs, one verified and one pending. 6. Idempotent
-re-seed. 7. The scripted walkthrough with the §6 narrative of `implementation-plan.md`.
+   per organization, documented credentials. 3. Realistic Dubai properties, units,
+   tenancies in several lifecycle states. 4. Tickets across every status, with activity
+   history. 5. Two sample tenancy PDFs, one verified and one pending. 6. Idempotent
+   re-seed. 7. The scripted walkthrough with the §6 narrative of `implementation-plan.md`.
 
 ### W2-L3 — Security audit and remediation (sole feature-code writer)
+
 **Owns:** `docs/security-audit.md` plus remediation edits anywhere in `app/`, `features/`, `services/`
+
 1. Walk `security-checklist.md` item by item, recording evidence per line. 2. Confirm
-no service-role usage outside server-only modules. 3. Verify every mutation route is
-wrapped and audited. 4. Adversarial pass: IDOR attempts on every route, client-supplied
-`organization_id` injection, signed-URL replay after expiry. 5. Prompt-injection pass
-against both AI routes. 6. Log-redaction verification. 7. Remediate findings and
-re-run every suite.
+   no service-role usage outside server-only modules. 3. Verify every mutation route is
+   wrapped and audited. 4. Adversarial pass: IDOR attempts on every route, client-supplied
+   `organization_id` injection, signed-URL replay after expiry. 5. Prompt-injection pass
+   against both AI routes. 6. Log-redaction verification. 7. Remediate findings and
+   re-run every suite.
 
 ### W2-L4 — Observability, performance, resilience
+
 **Owns:** `lib/observability/**`, `lib/rate-limit/**`, `instrumentation.ts`, `app/api/health/**`, `docs/runbook.md`
+
 1. Correlation IDs end to end, including into job records. 2. Request, error and
-AI-usage metrics. 3. Rate-limit tuning and 429 handling in the UI. 4. Health and
-readiness endpoints. 5. Index review against actual query plans. 6. Job dead-letter
-alerting. 7. Operations runbook.
+   AI-usage metrics. 3. Rate-limit tuning and 429 handling in the UI. 4. Health and
+   readiness endpoints. 5. Index review against actual query plans. 6. Job dead-letter
+   alerting. 7. Operations runbook.
 
 ### W2-L5 — Role dashboards and UX completion
+
 **Owns:** `app/(dashboard)/page.tsx`, `app/(dashboard)/dashboard/**`, `components/shell/**`, `config/{nav.registry,dashboard.slots}.ts`
+
 1. Compose the six widgets contributed in Wave 1 into five role-specific dashboards.
 2. Empty, loading and error states for every surface. 3. Responsive and keyboard
-navigation pass. 4. Accessibility pass on forms and the ticket timeline. 5. Consistent
-toasts and optimistic-update behaviour. 6. Final nav polish per role.
+   navigation pass. 4. Accessibility pass on forms and the ticket timeline. 5. Consistent
+   toasts and optimistic-update behaviour. 6. Final nav polish per role.
 
 ### W2-L6 — Deployment and documentation close-out
+
 **Owns:** `README.md`, `docs/{api-contracts,backlog,implementation-plan}.md`, `.github/workflows/deploy.yml`, `docs/deployment.md`
+
 1. Vercel plus Supabase cloud configuration, or the local-only path if that is the
-chosen target. 2. Migration promotion procedure. 3. Secret handling and rotation notes.
-4. Reconcile `api-contracts.md` with the routes as shipped. 5. Close out `backlog.md`.
-6. README quick start verified from a clean clone. 7. Release-gate checklist evidence.
+   chosen target. 2. Migration promotion procedure. 3. Secret handling and rotation notes.
+2. Reconcile `api-contracts.md` with the routes as shipped. 5. Close out `backlog.md`.
+3. README quick start verified from a clean clone. 7. Release-gate checklist evidence.
 
 **Wave 2 exit gate:** every release gate in `test-plan.md` green; security audit
 findings closed or explicitly accepted with rationale.
@@ -339,6 +389,7 @@ Nothing in this section may change after fan-out without re-planning. These are 
 contracts that let six agents work blind to each other.
 
 ### 5.1 Dependency list — installed once by W0-L1
+
 Runtime: `next`, `react`, `react-dom`, `@supabase/supabase-js`, `@supabase/ssr`, `zod`,
 `@anthropic-ai/sdk`, `pdf-parse`, `date-fns`, `lucide-react`, `clsx`, `tailwind-merge`,
 `class-variance-authority`, and the Radix primitives in §5.6.
@@ -349,6 +400,7 @@ No lane other than W0-L1 edits `package.json`. A missing dependency is a plannin
 report it, do not install it.
 
 ### 5.2 `withApiHandler` and the error envelope
+
 ```ts
 withApiHandler({
   roles?: MemberRole[],
@@ -359,15 +411,21 @@ withApiHandler({
 }, async (ctx) => Response)
 // ctx: { session, membership, body, query, supabase, serviceRole?, requestId, logger }
 ```
+
 Error responses are always exactly:
+
 ```json
-{ "error": { "code": "VALIDATION_ERROR", "message": "The request is invalid.", "request_id": "..." } }
+{
+  "error": { "code": "VALIDATION_ERROR", "message": "The request is invalid.", "request_id": "..." }
+}
 ```
+
 Codes: `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `CONFLICT`,
 `UNPROCESSABLE`, `RATE_LIMITED`, `INTERNAL_ERROR`. Status mapping per
 `api-contracts.md`. No lane invents a code or shape.
 
 ### 5.3 SQL helper signatures — W0-L2
+
 ```sql
 public.has_org_role(org uuid, roles public.member_role[]) returns boolean
 public.is_org_staff(org uuid)                            returns boolean
@@ -378,6 +436,7 @@ public.can_access_unit(org uuid, unit_id uuid)           returns boolean
 ```
 
 ### 5.4 Shared schema exports — W0-L4
+
 `CreatePropertySchema`, `UpdatePropertySchema`, `CreateUnitSchema`, `UpdateUnitSchema`,
 `CreateTenantSchema`, `CreateTenancySchema`, `UpdateTenancySchema`,
 `CreateTicketSchema`, `UpdateTicketSchema`, `AssignTicketSchema`,
@@ -388,22 +447,25 @@ Also `ALLOWED_TRANSITIONS`, `canTransition`, `resolvePriority`, `MEMBER_ROLES`,
 `TICKET_STATUSES`, `TICKET_PRIORITIES`, `MAINTENANCE_CATEGORIES`, `ApiError`.
 
 ### 5.5 Route ownership
-| Prefix | Lane |
-|--------|------|
+
+| Prefix                                     | Lane  |
+| ------------------------------------------ | ----- |
 | `/api/v1/organizations`, `/api/v1/members` | W1-L1 |
-| `/api/v1/properties` (and nested units) | W1-L2 |
-| `/api/v1/tenants`, `/api/v1/tenancies` | W1-L3 |
-| `/api/v1/maintenance` | W1-L4 |
-| `/api/v1/ai` | W1-L5 |
-| `/api/v1/documents` | W1-L6 |
-| `/api/health` | W2-L4 |
+| `/api/v1/properties` (and nested units)    | W1-L2 |
+| `/api/v1/tenants`, `/api/v1/tenancies`     | W1-L3 |
+| `/api/v1/maintenance`                      | W1-L4 |
+| `/api/v1/ai`                               | W1-L5 |
+| `/api/v1/documents`                        | W1-L6 |
+| `/api/health`                              | W2-L4 |
 
 ### 5.6 Pre-generated UI primitives — W0-L1
+
 `button`, `input`, `textarea`, `select`, `label`, `form`, `card`, `table`, `badge`,
 `dialog`, `dropdown-menu`, `tabs`, `toast`, `skeleton`, `alert`, `separator`, `avatar`,
 `tooltip`, `sheet`, `pagination`. No feature lane runs a component generator.
 
 ### 5.7 Other frozen values
+
 Storage path `{organization_id}/{entity}/{uuid}.pdf`; signed URL TTL 60 s; upload cap
 10 MB; `application/pdf` only. AI model id read from `AI_MODEL` env, default
 `claude-sonnet-5`, confirmed against the Claude API reference at implementation time.
@@ -415,30 +477,30 @@ Currency AED, locale `en-AE`. Cursor pagination, default limit 25, maximum 100.
 
 One owner per path per wave. This table is the source for `lanes.json`.
 
-| Path glob | W0 | W1 | W2 |
-|-----------|----|----|----|
-| `package.json`, root configs, `.github/**` | L1 | — | L6 (deploy only) |
-| `app/layout.tsx`, `app/globals.css`, `components/ui/**` | L1 | — | — |
-| `components/shell/**`, `config/*.ts` | L1 | — | L5 |
-| `scripts/check-lane-ownership.mjs`, `lanes.json`, `docs/agent-briefings.md` | pre-wave | pre-wave | pre-wave |
-| `supabase/migrations/0002_*.sql` | L2 | — | — |
-| `supabase/migrations/0003_*.sql` | L3 | — | — |
-| `packages/shared/**` | L4 | — | — |
-| `lib/**` | L5 | — | L4 (observability, rate-limit only) |
-| `vitest.config.ts`, `playwright.config.ts`, `tests/_harness/**`, `tests/rls/**` | L6 | — | L1 (e2e harness only) |
-| `scripts/{supabase-local,reset-db,make-jwts}.mjs` | L6 | — | — |
-| `app/(auth)/**`, `app/api/v1/{organizations,members}/**`, `features/organizations/**` | — | L1 | L3 |
-| `app/api/v1/properties/**`, `app/(dashboard)/properties/**`, `features/properties/**` | — | L2 | L3 |
-| `app/api/v1/{tenants,tenancies}/**`, `app/(dashboard)/tenancies/**`, `features/{tenants,tenancies}/**` | — | L3 | L3 |
-| `app/api/v1/maintenance/**`, `app/(dashboard)/maintenance/**`, `features/maintenance/**` | — | L4 | L3 |
-| `services/ai/**`, `app/api/v1/ai/**`, `features/ai-intake/**`, `evals/**` | — | L5 | L3 |
-| `app/api/v1/documents/**`, `services/{workers,extraction}/**`, `features/documents/**` | — | L6 | L3 |
-| `tests/<domain>/**` | — | owning feature lane | — |
-| `tests/e2e/**` | — | — | L1 |
-| `scripts/seed-demo.mjs`, `fixtures/demo/**` | — | — | L2 |
-| `app/(dashboard)/page.tsx`, `app/(dashboard)/dashboard/**` | — | — | L5 |
-| `app/api/health/**`, `instrumentation.ts` | — | — | L4 |
-| `README.md`, `docs/**` | — | — | L6 (except L2's walkthrough, L3's audit, L4's runbook) |
+| Path glob                                                                                              | W0       | W1                  | W2                                                     |
+| ------------------------------------------------------------------------------------------------------ | -------- | ------------------- | ------------------------------------------------------ |
+| `package.json`, root configs, `.github/**`                                                             | L1       | —                   | L6 (deploy only)                                       |
+| `app/layout.tsx`, `app/globals.css`, `components/ui/**`                                                | L1       | —                   | —                                                      |
+| `components/shell/**`, `config/*.ts`                                                                   | L1       | —                   | L5                                                     |
+| `scripts/check-lane-ownership.mjs`, `lanes.json`, `docs/agent-briefings.md`                            | pre-wave | pre-wave            | pre-wave                                               |
+| `supabase/migrations/0002_*.sql`                                                                       | L2       | —                   | —                                                      |
+| `supabase/migrations/0003_*.sql`                                                                       | L3       | —                   | —                                                      |
+| `packages/shared/**`                                                                                   | L4       | —                   | —                                                      |
+| `lib/**`                                                                                               | L5       | —                   | L4 (observability, rate-limit only)                    |
+| `vitest.config.ts`, `playwright.config.ts`, `tests/_harness/**`, `tests/rls/**`                        | L6       | —                   | L1 (e2e harness only)                                  |
+| `scripts/{supabase-local,reset-db,make-jwts}.mjs`                                                      | L6       | —                   | —                                                      |
+| `app/(auth)/**`, `app/api/v1/{organizations,members}/**`, `features/organizations/**`                  | —        | L1                  | L3                                                     |
+| `app/api/v1/properties/**`, `app/(dashboard)/properties/**`, `features/properties/**`                  | —        | L2                  | L3                                                     |
+| `app/api/v1/{tenants,tenancies}/**`, `app/(dashboard)/tenancies/**`, `features/{tenants,tenancies}/**` | —        | L3                  | L3                                                     |
+| `app/api/v1/maintenance/**`, `app/(dashboard)/maintenance/**`, `features/maintenance/**`               | —        | L4                  | L3                                                     |
+| `services/ai/**`, `app/api/v1/ai/**`, `features/ai-intake/**`, `evals/**`                              | —        | L5                  | L3                                                     |
+| `app/api/v1/documents/**`, `services/{workers,extraction}/**`, `features/documents/**`                 | —        | L6                  | L3                                                     |
+| `tests/<domain>/**`                                                                                    | —        | owning feature lane | —                                                      |
+| `tests/e2e/**`                                                                                         | —        | —                   | L1                                                     |
+| `scripts/seed-demo.mjs`, `fixtures/demo/**`                                                            | —        | —                   | L2                                                     |
+| `app/(dashboard)/page.tsx`, `app/(dashboard)/dashboard/**`                                             | —        | —                   | L5                                                     |
+| `app/api/health/**`, `instrumentation.ts`                                                              | —        | —                   | L4                                                     |
+| `README.md`, `docs/**`                                                                                 | —        | —                   | L6 (except L2's walkthrough, L3's audit, L4's runbook) |
 
 ---
 

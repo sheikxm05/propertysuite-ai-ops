@@ -1,11 +1,13 @@
 # Software Requirements Specification
 
 ## 1. Purpose
+
 Build a portfolio-grade AI-assisted property operations application for a Dubai real-estate scenario. The project demonstrates full-stack engineering, AI integration, secure data access, integrations, testing and deployment.
 
 This is an independently designed demonstration project, not a confirmed PropertySuite internal roadmap or take-home assignment.
 
 ## 2. Actors
+
 - Platform administrator: platform-level administration.
 - Organization administrator: manages one organization and its members.
 - Property owner: views properties and related activity they are authorized to access.
@@ -14,25 +16,30 @@ This is an independently designed demonstration project, not a confirmed Propert
 - Service provider: sees only assigned jobs and updates permitted job information.
 
 ## 3. MVP scope
+
 ### Authentication and organizations
+
 - Sign in/out using Supabase Auth.
 - Organization membership and invitations.
 - Role-based authorization.
 - Organization-scoped data isolation enforced by PostgreSQL RLS.
 
 ### Property management
+
 - Create, read, update and archive properties.
 - Manage units.
 - Associate owners and authorized managers.
 - Store address, property type and unit attributes.
 
 ### Tenant and tenancy management
+
 - Create tenant records and link to application users where applicable.
 - Create tenancy records with start/end dates and rent amount.
 - Track tenancy status.
 - Avoid exposing another tenant's personal data.
 
 ### Maintenance
+
 - Tenant creates a request manually or through AI-assisted intake.
 - Manager reviews, prioritizes and assigns a service provider.
 - Provider updates status and adds completion evidence.
@@ -40,6 +47,7 @@ This is an independently designed demonstration project, not a confirmed Propert
 - Keep an immutable activity history for key transitions.
 
 ### AI maintenance assistant
+
 - Classify a tenant's message into a controlled category.
 - Extract a concise summary and missing information.
 - Return validated structured output.
@@ -47,6 +55,7 @@ This is an independently designed demonstration project, not a confirmed Propert
 - Create a ticket only after user confirmation or an explicitly authorized workflow.
 
 ### Document intelligence
+
 - Upload PDF documents to private storage.
 - Extract text and proposed fields.
 - Display extracted values for human verification.
@@ -54,6 +63,7 @@ This is an independently designed demonstration project, not a confirmed Propert
 - Do not treat AI extraction as legal or financial truth.
 
 ## 4. Later-phase scope
+
 - WhatsApp Cloud API webhook and outbound messaging.
 - Google Drive synchronization.
 - Email notifications.
@@ -63,6 +73,7 @@ This is an independently designed demonstration project, not a confirmed Propert
 - Market data synchronization, subject to lawful data access and source terms.
 
 ## 5. Out of scope for MVP
+
 - Property listing marketplace.
 - Automated legal advice.
 - Autonomous rent collection or payment initiation.
@@ -71,6 +82,7 @@ This is an independently designed demonstration project, not a confirmed Propert
 - Direct integration with PropertySuite's production systems.
 
 ## 6. Functional acceptance criteria
+
 1. A user can authenticate and belong to an organization.
 2. Organization A cannot read or modify Organization B's records.
 3. Authorized users can create and update properties and units.
@@ -83,6 +95,7 @@ This is an independently designed demonstration project, not a confirmed Propert
 10. Critical state changes create audit/activity records.
 
 ## 7. Non-functional requirements
+
 - Validate all external inputs.
 - Enforce authorization server-side and in RLS.
 - Use private object storage and signed URLs.

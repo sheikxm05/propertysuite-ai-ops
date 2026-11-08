@@ -9,11 +9,11 @@ Three waves, six lanes each, eighteen agent tasks. Lanes inside a wave are fully
 parallel; **waves are barriers.** A wave merges and its gate passes before the next
 launches.
 
-| Wave | Theme | Gate |
-|------|-------|------|
-| 0 | Contracts, security core, test infrastructure | Migrations clean and idempotent; RLS isolation suite green; typecheck and lint green |
-| 1 | Six feature verticals | Every lane's tests green; ownership clean on all six diffs; RLS suite still green |
-| 2 | Cross-cutting completion and demo | Every release gate in `docs/test-plan.md` green |
+| Wave | Theme                                         | Gate                                                                                 |
+| ---- | --------------------------------------------- | ------------------------------------------------------------------------------------ |
+| 0    | Contracts, security core, test infrastructure | Migrations clean and idempotent; RLS isolation suite green; typecheck and lint green |
+| 1    | Six feature verticals                         | Every lane's tests green; ownership clean on all six diffs; RLS suite still green    |
+| 2    | Cross-cutting completion and demo             | Every release gate in `docs/test-plan.md` green                                      |
 
 Authoritative sources: `lanes.json` (ownership), `docs/parallel-execution-plan.md`
 (plan and interface freeze), `docs/agent-briefings.md` (the eighteen prompts).
@@ -111,8 +111,7 @@ what it would take. Scaling the work down is the user's call, not yours.
 
 ## Wave 2's special rule
 
-`w2-l3` (security audit and remediation) is the **sole writer on feature code** in Wave
-2. The other five lanes stay strictly inside their own paths. `lanes.json` encodes this
-with negated globs — `w2-l3` owns `app/**` and `lib/**` *minus* what `w2-l4` and
+`w2-l3` (security audit and remediation) is the **sole writer on feature code** in Wave 2. The other five lanes stay strictly inside their own paths. `lanes.json` encodes this
+with negated globs — `w2-l3` owns `app/**` and `lib/**` _minus_ what `w2-l4` and
 `w2-l5` hold. Verify with `--overlaps` before launching, and brief `w2-l3` that four
 agents are working beside it.

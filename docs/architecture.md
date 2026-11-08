@@ -1,9 +1,11 @@
 # Technical Architecture
 
 ## Architecture style
+
 Modular monolith with domain boundaries. Next.js is the web application and API boundary. Supabase provides authentication, PostgreSQL and private object storage. Long-running tasks are processed asynchronously by a durable worker/queue.
 
 ## Logical components
+
 1. Web UI: dashboards and role-specific pages.
 2. API layer: route handlers, schema validation, authentication and authorization.
 3. Domain services: properties, tenancies, maintenance, documents, notifications.
@@ -13,15 +15,19 @@ Modular monolith with domain boundaries. Next.js is the web application and API 
 7. Worker: document extraction, reminders, notifications and synchronization.
 
 ## Request flow
+
 Client -> Next.js route handler -> authenticate -> authorize organization/resource -> validate input -> domain service -> database/queue/provider -> response.
 
 ## AI workflow
+
 Message -> identify authenticated actor and organization -> fetch only authorized context -> LLM structured classification -> validate output -> return draft -> human confirmation -> create ticket through normal domain service.
 
 The model must not receive service-role credentials or unrestricted database tools.
 
 ## Background jobs
+
 Use a durable queue or managed scheduled/queue service. Each job should have:
+
 - Unique idempotency key
 - Attempt count and next retry time
 - Bounded exponential backoff
@@ -31,6 +37,7 @@ Use a durable queue or managed scheduled/queue service. Each job should have:
 Do not rely on an HTTP request staying open for long-running extraction or synchronization.
 
 ## Suggested repository layout
+
 ```text
 apps/web/
   app/
@@ -72,6 +79,7 @@ tests/
 ```
 
 ## Key decisions
+
 - Use UUID primary keys.
 - Store money as numeric(12,2) plus ISO currency code.
 - Store timestamps as timestamptz.

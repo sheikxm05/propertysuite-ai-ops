@@ -34,6 +34,7 @@ rationale. The two are consistent — read this first, then that one to execute.
 ## 2. Scope
 
 ### In scope — built to done
+
 - Supabase Auth sign-in/out, organization onboarding, member invitations, five org roles
 - Fine-grained RLS across all tenant-scoped tables, plus private Storage policies
 - Property and unit management with archive
@@ -47,6 +48,7 @@ rationale. The two are consistent — read this first, then that one to execute.
 - In-app notifications
 
 ### Deferred — explicitly out of this build
+
 - WhatsApp Cloud API, Stripe, Google Drive sync, outbound email delivery
 - RAG over authorized documents (see §9)
 - Platform-administrator console (service-role operations only)
@@ -59,24 +61,25 @@ rationale. The two are consistent — read this first, then that one to execute.
 Defects and gaps in `supabase/migrations/0001_initial_schema.sql`, all addressed in
 migration `0002`.
 
-| # | Finding | Impact | Fix |
-|---|---------|--------|-----|
-| 1 | `organizations` has no RLS enabled | Any authenticated user enumerates every tenant organization | Enable RLS; read restricted to own memberships |
-| 2 | `profiles` has no RLS enabled | Any authenticated user reads every user's name, email and phone, platform-wide | Enable RLS; self plus same-org visibility; tenants and providers see self only |
-| 3 | Policies only test `is_org_member()` | A tenant reads every other tenant's PII, every tenancy and every document in the organization | Role-, self- and assignment-scoped policies |
-| 4 | Service providers have organization-wide ticket read | Violates acceptance criterion 7 | Restrict to `assigned_provider_id` matching the caller |
-| 5 | `for all` policies grant DELETE | Hard deletion of tenancy and financial records | Remove DELETE grants; archive status instead |
-| 6 | `maintenance_activities` immutable only by omission of policy | "Immutable history" is not actually guaranteed | Explicit revoke plus a block trigger on UPDATE/DELETE |
-| 7 | `audit_logs` readable by any member | Audit trail visible to tenants and providers | Organization-admin read only |
-| 8 | No INSERT policy on `organizations` / `organization_members` | Onboarding and invitation impossible from the client | Intentional: route through `security definer` RPCs |
-| 9 | `properties.owner_member_id` FK omits `organization_id` | Cross-organization owner assignment is structurally possible | Composite foreign key |
-| 10 | `documents` stores extracted fields but not source text | Adding retrieval later would require reprocessing every document | Add `extracted_text` now |
+| #   | Finding                                                       | Impact                                                                                        | Fix                                                                            |
+| --- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| 1   | `organizations` has no RLS enabled                            | Any authenticated user enumerates every tenant organization                                   | Enable RLS; read restricted to own memberships                                 |
+| 2   | `profiles` has no RLS enabled                                 | Any authenticated user reads every user's name, email and phone, platform-wide                | Enable RLS; self plus same-org visibility; tenants and providers see self only |
+| 3   | Policies only test `is_org_member()`                          | A tenant reads every other tenant's PII, every tenancy and every document in the organization | Role-, self- and assignment-scoped policies                                    |
+| 4   | Service providers have organization-wide ticket read          | Violates acceptance criterion 7                                                               | Restrict to `assigned_provider_id` matching the caller                         |
+| 5   | `for all` policies grant DELETE                               | Hard deletion of tenancy and financial records                                                | Remove DELETE grants; archive status instead                                   |
+| 6   | `maintenance_activities` immutable only by omission of policy | "Immutable history" is not actually guaranteed                                                | Explicit revoke plus a block trigger on UPDATE/DELETE                          |
+| 7   | `audit_logs` readable by any member                           | Audit trail visible to tenants and providers                                                  | Organization-admin read only                                                   |
+| 8   | No INSERT policy on `organizations` / `organization_members`  | Onboarding and invitation impossible from the client                                          | Intentional: route through `security definer` RPCs                             |
+| 9   | `properties.owner_member_id` FK omits `organization_id`       | Cross-organization owner assignment is structurally possible                                  | Composite foreign key                                                          |
+| 10  | `documents` stores extracted fields but not source text       | Adding retrieval later would require reprocessing every document                              | Add `extracted_text` now                                                       |
 
 ---
 
 ## 4. Target RLS model
 
 ### Helper functions
+
 `current_profile_id()` and `is_org_member()` already exist. Added in `0002`, all
 declared `stable security definer set search_path = ''`:
 
@@ -95,29 +98,31 @@ caches them per statement rather than evaluating per row.
 `R` read, `W` write, `C` create, `U` update, `A` archive. No `DELETE` is granted on any
 table. Onboarding and invitation writes go through RPCs, not direct policies.
 
-| Table | organization_admin | property_manager | property_owner | tenant | service_provider |
-|-------|-----|-----|-----|-----|-----|
-| `organizations` | R own | R own | R own | R own | R own |
-| `profiles` | R self + same-org | R self + same-org | R self + same-org | R self only | R self only |
-| `organization_members` | RW | R | R | R self | R self |
-| `properties` | RWA | RWA | R owned | R via tenancy | R via assigned ticket |
-| `property_units` | RWA | RWA | R owned | R leased | R via assigned ticket |
-| `tenants` | RW | RW | — | R self only | R name only, via assignment |
-| `tenancies` | RW | RW | R owned | R own | — |
-| `service_providers` | RW | RW | — | — | R self |
-| `maintenance_tickets` | RW | RW | R owned | CR own, confirm completion | R + U assigned only, status subset |
-| `maintenance_activities` | R | CR | R owned | CR own tickets | CR assigned tickets |
-| `documents` | RW | RW | R owned | R own tenancy | — |
-| `ai_conversations` / `ai_messages` | R | R | — | CR own | — |
-| `notifications` | R own | R own | R own | R own | R own |
-| `audit_logs` | R | — | — | — | — |
+| Table                              | organization_admin | property_manager  | property_owner    | tenant                     | service_provider                   |
+| ---------------------------------- | ------------------ | ----------------- | ----------------- | -------------------------- | ---------------------------------- |
+| `organizations`                    | R own              | R own             | R own             | R own                      | R own                              |
+| `profiles`                         | R self + same-org  | R self + same-org | R self + same-org | R self only                | R self only                        |
+| `organization_members`             | RW                 | R                 | R                 | R self                     | R self                             |
+| `properties`                       | RWA                | RWA               | R owned           | R via tenancy              | R via assigned ticket              |
+| `property_units`                   | RWA                | RWA               | R owned           | R leased                   | R via assigned ticket              |
+| `tenants`                          | RW                 | RW                | —                 | R self only                | R name only, via assignment        |
+| `tenancies`                        | RW                 | RW                | R owned           | R own                      | —                                  |
+| `service_providers`                | RW                 | RW                | —                 | —                          | R self                             |
+| `maintenance_tickets`              | RW                 | RW                | R owned           | CR own, confirm completion | R + U assigned only, status subset |
+| `maintenance_activities`           | R                  | CR                | R owned           | CR own tickets             | CR assigned tickets                |
+| `documents`                        | RW                 | RW                | R owned           | R own tenancy              | —                                  |
+| `ai_conversations` / `ai_messages` | R                  | R                 | —                 | CR own                     | —                                  |
+| `notifications`                    | R own              | R own             | R own             | R own                      | R own                              |
+| `audit_logs`                       | R                  | —                 | —                 | —                          | —                                  |
 
 ### Storage
+
 Single private bucket. Object path convention `{organization_id}/{entity}/{uuid}.pdf`;
 storage policies derive the organization from the first path segment and require active
 membership. Signed URLs expire in 60 seconds. No public bucket exists.
 
 ### Ticket state machine
+
 `open → assigned → in_progress → awaiting_approval → completed`, with `cancelled`
 reachable from any non-terminal state. Enforced in the domain service **and** by a
 database trigger. Illegal transitions return `409`. A service provider may only drive
@@ -129,6 +134,7 @@ may close to `completed`.
 ## 5. Sprint plan
 
 ### Sprint 0 — Foundation
+
 - `git init`, Next.js App Router + TypeScript (strict), Tailwind, shadcn/ui
 - ESLint with a rule forbidding server-only imports from client modules
 - Zod-parsed environment validation that fails fast at boot
@@ -139,6 +145,7 @@ may close to `completed`.
 **Exit gate:** build and CI pass on an empty app; no secret reachable from the browser bundle.
 
 ### Sprint 1 — Migration `0002`: security hardening and fine-grained RLS
+
 - Helper functions from §4
 - Replace all baseline policies with the §4 matrix
 - Immutability trigger and revokes on `maintenance_activities`
@@ -151,6 +158,7 @@ may close to `completed`.
 **Exit gate:** migration applies cleanly to a fresh database and is idempotent on re-run.
 
 ### Sprint 2 — RLS test harness and isolation suite
+
 - Vitest harness that signs in as each role in each of two organizations and holds real JWTs
 - Assertions for SELECT, INSERT, UPDATE and DELETE denial across organizations and across roles
 - Specific cases: tenant cannot read another tenant's PII; provider sees exactly one assigned job; owner sees only owned properties; cross-organization identifier mismatch rejected; activity rows cannot be updated or deleted
@@ -158,6 +166,7 @@ may close to `completed`.
 **Exit gate (hard):** the isolation suite passes and is wired into CI. No feature work begins before this gate is green.
 
 ### Sprint 3 — Identity and organizations
+
 - Sign-in and sign-out, session handling, protected route middleware
 - Organization creation through `create_organization`
 - Invitation issue and acceptance flows
@@ -166,6 +175,7 @@ may close to `completed`.
 **Exit gate:** a second user can be invited, accept, and receive exactly their role's visibility.
 
 ### Sprint 4 — Properties and units
+
 - Property and unit CRUD plus archive; owner and manager association
 - Zod schemas shared between client form and server handler
 - Audit record on every mutation
@@ -174,6 +184,7 @@ may close to `completed`.
 **Exit gate:** the contracts in `api-contracts.md` implemented with the standard error envelope; authorization tests pass.
 
 ### Sprint 5 — Tenants and tenancies
+
 - Tenant records, optional linkage to an application user
 - Tenancy lifecycle: draft, active, expired, terminated; date and rent validation
 - Tenant self-service view of own tenancy only
@@ -181,6 +192,7 @@ may close to `completed`.
 **Exit gate:** a signed-in tenant sees their own tenancy and provably cannot read another's.
 
 ### Sprint 6 — Maintenance workflow
+
 - Ticket creation by a tenant for an authorized unit only
 - Manager triage, prioritization and assignment within the organization
 - Provider job list, status updates, completion evidence upload
@@ -190,6 +202,7 @@ may close to `completed`.
 **Exit gate:** the state machine rejects every illegal transition in tests; the provider view contains only assigned work.
 
 ### Sprint 7 — AI maintenance intake
+
 - Provider-neutral AI adapter; `classify()` returns a validated object or throws
 - Versioned prompt and JSON schema in source, per `docs/ai-prompts/maintenance-classification.md`
 - Untrusted-content fencing as the adapter's only input path; user or document text never enters the system role
@@ -204,6 +217,7 @@ may close to `completed`.
 **Exit gate:** the evaluation set passes; no model output path can reach a privileged action.
 
 ### Sprint 8 — Document intelligence
+
 - Signed-URL upload to the private bucket; MIME, extension and size validation
 - Job runner processing extraction with bounded exponential backoff and a dead-letter state
 - Text and structured field extraction per `docs/ai-prompts/document-extraction.md`
@@ -213,6 +227,7 @@ may close to `completed`.
 **Exit gate:** extraction is never treated as verified without a human action; a failing job lands in dead-letter rather than retrying forever.
 
 ### Sprint 9 — Hardening and demonstration
+
 - Playwright end-to-end covering the ten-step scenario in `docs/test-plan.md`
 - Full pass over `docs/security-checklist.md`, item by item
 - Structured logging with correlation identifiers; error boundaries; rate limits reviewed
@@ -243,27 +258,27 @@ Step 8 is the point of the project and belongs in the demo, not merely in a test
 
 ## 7. Decisions and assumptions
 
-| Area | Decision |
-|------|----------|
-| AI provider | Anthropic by default, behind a swappable adapter |
-| PDF text | `pdf-parse`; no OCR in this build |
-| Queue | Database-backed job table, not a hosted queue service |
-| UI | Tailwind plus shadcn/ui |
-| Local environment | Supabase CLI stack on Docker; credentials generated locally |
-| Deployment | Vercel plus Supabase cloud, or local-only demo — confirm before Sprint 9 |
-| Locale | AED, Dubai, `en-AE` |
-| Deletion | Archive only; no destructive endpoints |
+| Area              | Decision                                                                 |
+| ----------------- | ------------------------------------------------------------------------ |
+| AI provider       | Anthropic by default, behind a swappable adapter                         |
+| PDF text          | `pdf-parse`; no OCR in this build                                        |
+| Queue             | Database-backed job table, not a hosted queue service                    |
+| UI                | Tailwind plus shadcn/ui                                                  |
+| Local environment | Supabase CLI stack on Docker; credentials generated locally              |
+| Deployment        | Vercel plus Supabase cloud, or local-only demo — confirm before Sprint 9 |
+| Locale            | AED, Dubai, `en-AE`                                                      |
+| Deletion          | Archive only; no destructive endpoints                                   |
 
 ---
 
 ## 8. Inputs required
 
-| Value | Needed by | Source |
-|-------|-----------|--------|
-| `ANTHROPIC_API_KEY` | Sprint 7 | Written directly into `.env.local`, never pasted into chat |
-| Cloud Supabase URL, anon key, service-role key, database password | Sprint 9, only if deployed | Supabase dashboard |
-| `SUPABASE_ACCESS_TOKEN` and project reference | Sprint 9, only for `db push` | Supabase dashboard, or apply SQL manually |
-| Demo organization and user names | Sprint 9 | Defaults available |
+| Value                                                             | Needed by                    | Source                                                     |
+| ----------------------------------------------------------------- | ---------------------------- | ---------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`                                               | Sprint 7                     | Written directly into `.env.local`, never pasted into chat |
+| Cloud Supabase URL, anon key, service-role key, database password | Sprint 9, only if deployed   | Supabase dashboard                                         |
+| `SUPABASE_ACCESS_TOKEN` and project reference                     | Sprint 9, only for `db push` | Supabase dashboard, or apply SQL manually                  |
+| Demo organization and user names                                  | Sprint 9                     | Defaults available                                         |
 
 Generated locally, not required from anyone: `NEXT_PUBLIC_SUPABASE_URL`,
 `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `APP_BASE_URL`, `AI_PROVIDER`.

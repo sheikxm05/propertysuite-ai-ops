@@ -18,7 +18,7 @@ isolation, built by **six agents working in parallel** with zero file overlap.
 Not "the features work." Success is:
 
 1. **Organization A provably cannot reach Organization B's data** — enforced in
-   Postgres RLS *and* server-side, proven by adversarial tests, and visible on screen
+   Postgres RLS _and_ server-side, proven by adversarial tests, and visible on screen
    in the demo.
 2. **Role boundaries hold inside an organization** — a tenant cannot see another
    tenant's personal data; a service provider sees only assigned jobs.
@@ -56,17 +56,17 @@ Not "the features work." Success is:
 
 ## Where the truth lives
 
-| Question | Document |
-|----------|----------|
-| What are we building, and what must be true? | `docs/requirements.md` |
-| Security model, RLS matrix, sprint intent | `docs/implementation-plan.md` |
-| Who owns which file; the interface freeze | `docs/parallel-execution-plan.md` |
-| Enforced ownership map | `lanes.json` |
-| Per-lane agent prompts | `docs/agent-briefings.md` |
-| Route shapes and status codes | `docs/api-contracts.md` |
-| AI prompt and output contracts | `docs/ai-prompts/` |
-| Test strategy and release gates | `docs/test-plan.md` |
-| Security checklist | `docs/security-checklist.md` |
+| Question                                     | Document                          |
+| -------------------------------------------- | --------------------------------- |
+| What are we building, and what must be true? | `docs/requirements.md`            |
+| Security model, RLS matrix, sprint intent    | `docs/implementation-plan.md`     |
+| Who owns which file; the interface freeze    | `docs/parallel-execution-plan.md` |
+| Enforced ownership map                       | `lanes.json`                      |
+| Per-lane agent prompts                       | `docs/agent-briefings.md`         |
+| Route shapes and status codes                | `docs/api-contracts.md`           |
+| AI prompt and output contracts               | `docs/ai-prompts/`                |
+| Test strategy and release gates              | `docs/test-plan.md`               |
+| Security checklist                           | `docs/security-checklist.md`      |
 
 When a document and the code disagree, the document is the contract — fix the code or
 report a planning defect. Never silently diverge.

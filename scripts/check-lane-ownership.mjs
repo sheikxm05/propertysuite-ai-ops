@@ -83,7 +83,14 @@ function globToRegExp(glob) {
       if (end === -1) {
         re += '\\{';
       } else {
-        re += '(?:' + glob.slice(i + 1, end).split(',').map(escapeLiteral).join('|') + ')';
+        re +=
+          '(?:' +
+          glob
+            .slice(i + 1, end)
+            .split(',')
+            .map(escapeLiteral)
+            .join('|') +
+          ')';
         i = end;
       }
     } else {
@@ -151,7 +158,11 @@ function loadConfig() {
 /* ------------------------------------------------------------------- git -- */
 
 function git(args) {
-  return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  return execFileSync('git', args, {
+    cwd: ROOT,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
 }
 
 function isRepo() {
@@ -163,9 +174,15 @@ function isRepo() {
   }
 }
 
-/** Working-tree changes: staged, unstaged, untracked and both sides of a rename. */
+/**
+ * Working-tree changes: staged, unstaged, untracked and both sides of a rename.
+ *
+ * `-uall` is essential: without it git collapses an untracked directory to `app/`, and
+ * the ownership test then runs against the directory instead of the files inside it,
+ * reporting a false violation for every new feature folder.
+ */
 function workingTreeFiles() {
-  const out = git(['status', '--porcelain=v1', '-z']);
+  const out = git(['status', '--porcelain=v1', '-uall', '-z']);
   const entries = out.split('\0').filter(Boolean);
   const files = new Set();
   for (let i = 0; i < entries.length; i++) {
@@ -189,7 +206,7 @@ function branchFiles(base) {
 
 /* ---------------------------------------------------------------- checks -- */
 
-function checkLane(lanes, laneId, files, opts) {
+function checkLane(lanes, laneId, files) {
   const lane = lanes.get(laneId);
   if (!lane) {
     fail(`unknown lane "${laneId}". Known: ${[...lanes.keys()].join(', ')}`);
@@ -210,7 +227,12 @@ function checkLane(lanes, laneId, files, opts) {
       (l) => l.wave !== lane.wave && ownsPath(l.compiled, file),
     );
     if (peerOwner) {
-      violations.push({ file, owner: peerOwner.id, ownerTitle: peerOwner.title, scope: 'same-wave' });
+      violations.push({
+        file,
+        owner: peerOwner.id,
+        ownerTitle: peerOwner.title,
+        scope: 'same-wave',
+      });
     } else if (otherWaveOwner) {
       violations.push({
         file,
@@ -233,15 +255,17 @@ function checkOverlaps(lanes) {
   const expandBraces = (glob) => {
     const m = glob.match(/\{([^}]*)\}/);
     if (!m) return [glob];
-    return m[1]
-      .split(',')
-      .flatMap((alt) => expandBraces(glob.replace(m[0], alt)));
+    return m[1].split(',').flatMap((alt) => expandBraces(glob.replace(m[0], alt)));
   };
   for (const lane of lanes.values()) {
     for (const inc of lane.compiled.include) {
       for (const g of expandBraces(inc.glob)) {
         candidates.add(
-          g.replace(/\*\*\//g, 'seg/').replace(/\*\*/g, 'seg/leaf.ts').replace(/\*/g, 'leaf').replace(/\?/g, 'x'),
+          g
+            .replace(/\*\*\//g, 'seg/')
+            .replace(/\*\*/g, 'seg/leaf.ts')
+            .replace(/\*/g, 'leaf')
+            .replace(/\?/g, 'x'),
         );
       }
     }
@@ -265,7 +289,14 @@ function checkOverlaps(lanes) {
 /* ---------------------------------------------------------------- output -- */
 
 const C = process.stdout.isTTY
-  ? { red: '\x1b[31m', green: '\x1b[32m', yellow: '\x1b[33m', dim: '\x1b[2m', bold: '\x1b[1m', off: '\x1b[0m' }
+  ? {
+      red: '\x1b[31m',
+      green: '\x1b[32m',
+      yellow: '\x1b[33m',
+      dim: '\x1b[2m',
+      bold: '\x1b[1m',
+      off: '\x1b[0m',
+    }
   : { red: '', green: '', yellow: '', dim: '', bold: '', off: '' };
 
 function fail(msg) {
@@ -281,7 +312,14 @@ function main() {
 
   if (args.flags.has('list')) {
     if (json) {
-      console.log(JSON.stringify([...lanes.values()].map(({ compiled, ...l }) => l), null, 2));
+      // Strip the compiled matchers; they are RegExp objects and not useful as JSON.
+      console.log(
+        JSON.stringify(
+          [...lanes.values()].map(({ compiled: _compiled, ...l }) => l),
+          null,
+          2,
+        ),
+      );
       return;
     }
     for (const wave of cfg.waves) {
@@ -326,7 +364,7 @@ function main() {
     files = args.base ? branchFiles(args.base) : workingTreeFiles();
   }
 
-  const result = checkLane(lanes, args.lane, files, args);
+  const result = checkLane(lanes, args.lane, files);
   const { lane, allowed, violations, orphans } = result;
   const showOrphans = args.flags.has('orphans');
 
@@ -353,13 +391,17 @@ function main() {
       );
     }
     if (showOrphans && orphans.length) {
-      console.log(`${C.yellow}⚠ ${orphans.length} path(s) owned by no lane in wave ${lane.wave}:${C.off}`);
+      console.log(
+        `${C.yellow}⚠ ${orphans.length} path(s) owned by no lane in wave ${lane.wave}:${C.off}`,
+      );
       for (const f of orphans) console.log(`    ${f}`);
     }
     return;
   }
 
-  console.error(`\n${C.red}${C.bold}✗ lane-ownership violation — ${lane.id} (${lane.title})${C.off}\n`);
+  console.error(
+    `\n${C.red}${C.bold}✗ lane-ownership violation — ${lane.id} (${lane.title})${C.off}\n`,
+  );
   for (const v of violations) {
     console.error(`  ${C.red}${v.file}${C.off}`);
     console.error(`    owned by ${C.bold}${v.owner}${C.off} (${v.ownerTitle}) — ${v.scope}`);

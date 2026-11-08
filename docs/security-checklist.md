@@ -1,6 +1,7 @@
 # Security Checklist
 
 ## Identity and authorization
+
 - [ ] Verify Supabase session server-side on every protected route.
 - [ ] Derive organization membership from trusted database records.
 - [ ] Check role and resource-level permissions for every mutation.
@@ -9,6 +10,7 @@
 - [ ] Ensure service-role key is never exposed to browser code.
 
 ## Data protection
+
 - [ ] Use private storage buckets.
 - [ ] Use short-lived signed URLs.
 - [ ] Validate MIME type, extension and file size.
@@ -17,6 +19,7 @@
 - [ ] Define retention and deletion policies.
 
 ## AI safety
+
 - [ ] Treat document text and user messages as untrusted.
 - [ ] Prevent retrieved content from overriding system instructions.
 - [ ] Send only the minimum authorized context to the model.
@@ -26,6 +29,7 @@
 - [ ] Rate-limit and monitor AI endpoints.
 
 ## Integrations
+
 - [ ] Verify WhatsApp and Stripe webhook authenticity.
 - [ ] Deduplicate webhook event IDs.
 - [ ] Store secrets in server-side environment variables.

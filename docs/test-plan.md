@@ -1,6 +1,7 @@
 # Test Plan
 
 ## Unit tests
+
 - Input schemas and validation.
 - Role/permission policy functions.
 - Maintenance status transition rules.
@@ -8,6 +9,7 @@
 - Idempotency key generation.
 
 ## Database/integration tests
+
 - RLS allows same-organization authorized access.
 - RLS blocks cross-organization access.
 - Tenant can create a ticket only for an authorized tenancy/unit.
@@ -16,6 +18,7 @@
 - Duplicate webhook event is processed once.
 
 ## AI evaluation tests
+
 - HVAC issue classified as HVAC.
 - Plumbing leak classified as plumbing.
 - Missing property context triggers clarification.
@@ -24,6 +27,7 @@
 - Model output never directly executes a privileged action.
 
 ## End-to-end scenarios
+
 1. Organization admin invites a property manager.
 2. Manager creates property and unit.
 3. Manager adds tenant and tenancy.
@@ -36,6 +40,7 @@
 10. Other organization cannot access any of these records.
 
 ## Release gates
+
 - Type check passes.
 - Lint passes.
 - Unit and integration tests pass.

@@ -91,8 +91,9 @@ READ-ONLY: docs/**
 ALREADY BUILT — DO NOT RECREATE: lanes.json, scripts/check-lane-ownership.mjs
 
 TASKS:
-  1. git init. Initial commit. Document the lane/<id> branch convention in README
-     (README itself is owned by w2-l6 — add nothing else to it).
+  1. ALREADY DONE PRE-WAVE — do not repeat: `git init`, branch `main`, and the initial
+     commit of the planning artifacts exist. Do not run `git init`, do not re-commit
+     planning files, do not rewrite history. Start from the existing HEAD.
   2. Scaffold Next.js App Router + TypeScript strict. Path alias @/* to repo root.
   3. Install the ENTIRE frozen dependency list from §5.1 in one pass. No other lane
      will ever edit package.json, so a missing entry blocks five agents. Check §5.1
@@ -763,6 +764,7 @@ closed; release-gate evidence recorded.
 ## Launch checklist
 
 Before Wave 0:
+
 - [ ] Read `parallel-execution-plan.md` §5 yourself. If the freeze is wrong, six agents
       build against a bad contract simultaneously.
 - [ ] `node scripts/check-lane-ownership.mjs --overlaps` — must pass.
@@ -770,6 +772,7 @@ Before Wave 0:
 - [ ] Decide the deployment target (affects W2-L6 only).
 
 Between waves:
+
 - [ ] All six lane branches merged.
 - [ ] `node scripts/check-lane-ownership.mjs --lane <id> --base main` clean for each.
 - [ ] The wave exit gate in `lanes.json` satisfied.

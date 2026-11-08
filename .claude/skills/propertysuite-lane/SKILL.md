@@ -20,7 +20,7 @@ six-ways-parallel with zero file overlap.
 
 Success is not "my feature works." It is:
 
-1. Organization A provably cannot reach Organization B's data — in RLS *and*
+1. Organization A provably cannot reach Organization B's data — in RLS _and_
    server-side, proven by adversarial tests.
 2. Role boundaries hold inside an organization — no tenant sees another tenant's PII; no
    provider sees unassigned work.
@@ -80,7 +80,7 @@ in `.claude/settings.json`, which blocks an out-of-lane write before it happens.
 
 ## Security invariants — the point of the project
 
-- Authorization is enforced **twice**: Postgres RLS *and* server-side checks. Never rely
+- Authorization is enforced **twice**: Postgres RLS _and_ server-side checks. Never rely
   on one alone. Assume the other layer has a bug.
 - Never trust a client-supplied `organization_id` in a body, query string, header or
   cookie. Derive membership from trusted rows via `resolveMembership()`.
