@@ -16,6 +16,11 @@
  *   --base <ref>     Compare the whole branch against <ref> instead of the working tree.
  *   --files <paths>  Check these paths instead of asking git.
  *   --orphans        Also warn about changed paths no lane in this wave owns.
+ *   --shared-tree    Several lanes share one working directory, so authorship cannot be
+ *                    attributed from `git status`. Paths owned by ANOTHER lane are
+ *                    reported as unattributable rather than as violations, and only
+ *                    orphans fail. Omit this whenever each lane has its own branch or
+ *                    worktree — strict mode is the real check.
  *   --overlaps       Static check: assert no two lanes in the same wave can own one path.
  *   --list           Print every wave, lane and owned glob.
  *   --json           Machine-readable output.
@@ -365,18 +370,35 @@ function main() {
   }
 
   const result = checkLane(lanes, args.lane, files);
-  const { lane, allowed, violations, orphans } = result;
+  const { lane, allowed, orphans } = result;
   const showOrphans = args.flags.has('orphans');
+
+  // In a shared working directory `git status` cannot tell us WHO wrote a file, so a
+  // path owned by another lane is not evidence that this lane misbehaved. Report it
+  // separately and fail only on orphans. Strict mode remains the default because a
+  // per-branch or per-worktree run CAN attribute authorship.
+  const sharedTree = args.flags.has('shared-tree');
+  const violations = sharedTree ? [] : result.violations;
+  const unattributable = sharedTree ? result.violations : [];
 
   if (json) {
     console.log(
       JSON.stringify(
-        { lane: lane.id, wave: lane.wave, checked: files.length, allowed, violations, orphans },
+        {
+          lane: lane.id,
+          wave: lane.wave,
+          mode: sharedTree ? 'shared-tree' : 'strict',
+          checked: files.length,
+          allowed,
+          violations,
+          unattributable,
+          orphans,
+        },
         null,
         2,
       ),
     );
-    process.exit(violations.length ? 1 : 0);
+    process.exit(violations.length || (sharedTree && orphans.length) ? 1 : 0);
   }
 
   if (files.length === 0) {
@@ -389,6 +411,21 @@ function main() {
       console.log(
         `${C.green}✓ ${lane.id}${C.off} — ${allowed.length} changed file(s), all within owned paths ${C.dim}(wave ${lane.wave})${C.off}`,
       );
+      if (sharedTree && unattributable.length) {
+        console.log(
+          `${C.dim}  shared-tree mode: ${unattributable.length} path(s) belong to other lanes and were ignored — authorship is not attributable from a shared working directory.${C.off}`,
+        );
+      }
+    }
+    if (sharedTree && orphans.length) {
+      console.error(
+        `\n${C.red}✗ ${orphans.length} changed path(s) owned by NO lane:${C.off}`,
+      );
+      for (const f of orphans) console.error(`    ${f}`);
+      console.error(
+        `\nAn unowned path is a planning defect: report it rather than adopting it.\n`,
+      );
+      process.exit(1);
     }
     if (showOrphans && orphans.length) {
       console.log(
