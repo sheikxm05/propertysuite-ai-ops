@@ -48,9 +48,10 @@ const OTHER_UUID = '11111111-2222-4333-8444-555555555555';
 
 describe('CreateOrganizationSchema', () => {
   it('accepts a name and slug', () => {
-    expect(CreateOrganizationSchema.parse({ name: 'Marina Group', slug: 'marina-group' })).toEqual(
-      { name: 'Marina Group', slug: 'marina-group' },
-    );
+    expect(CreateOrganizationSchema.parse({ name: 'Marina Group', slug: 'marina-group' })).toEqual({
+      name: 'Marina Group',
+      slug: 'marina-group',
+    });
   });
 
   it('rejects a missing field, a short name and a bad slug', () => {
@@ -97,7 +98,10 @@ describe('AcceptInvitationSchema', () => {
   it('rejects a short token and an unknown key', () => {
     expect(() => AcceptInvitationSchema.parse({ invitation_token: 'short' })).toThrow();
     expect(() =>
-      AcceptInvitationSchema.parse({ invitation_token: 'a'.repeat(43), role: 'organization_admin' }),
+      AcceptInvitationSchema.parse({
+        invitation_token: 'a'.repeat(43),
+        role: 'organization_admin',
+      }),
     ).toThrow();
   });
 });
@@ -174,9 +178,7 @@ describe('CreatePropertySchema', () => {
         address_line: 'Example Street',
       }),
     ).toThrow();
-    expect(() =>
-      CreatePropertySchema.parse({ name: 'X Tower', property_type: 'villa' }),
-    ).toThrow();
+    expect(() => CreatePropertySchema.parse({ name: 'X Tower', property_type: 'villa' })).toThrow();
   });
 
   it('rejects a client-supplied organization_id or status', () => {
@@ -646,9 +648,7 @@ describe('ClassifyRequestSchema', () => {
   });
 
   it('rejects a client-supplied tenant or organization', () => {
-    expect(() =>
-      ClassifyRequestSchema.parse({ message: 'hello', tenant_id: UUID }),
-    ).toThrow();
+    expect(() => ClassifyRequestSchema.parse({ message: 'hello', tenant_id: UUID })).toThrow();
     expect(() =>
       ClassifyRequestSchema.parse({ message: 'hello', organization_id: UUID }),
     ).toThrow();
@@ -681,9 +681,7 @@ describe('ClassificationSchema — model output validation', () => {
   });
 
   it('rejects a clarification flag with no question', () => {
-    expect(() =>
-      ClassificationSchema.parse({ ...valid, requires_clarification: true }),
-    ).toThrow();
+    expect(() => ClassificationSchema.parse({ ...valid, requires_clarification: true })).toThrow();
     expect(() =>
       ClassificationSchema.parse({
         ...valid,
@@ -704,16 +702,14 @@ describe('ClassificationSchema — model output validation', () => {
   });
 
   it('rejects a priority outside the four', () => {
-    expect(() => ClassificationSchema.parse({ ...valid, suggested_priority: 'critical' })).toThrow();
+    expect(() =>
+      ClassificationSchema.parse({ ...valid, suggested_priority: 'critical' }),
+    ).toThrow();
   });
 
   it('rejects an extra key — an off-contract model response must not be silently stripped', () => {
-    expect(() =>
-      ClassificationSchema.parse({ ...valid, ticket_created: true }),
-    ).toThrow();
-    expect(() =>
-      ClassificationSchema.parse({ ...valid, assigned_provider_id: UUID }),
-    ).toThrow();
+    expect(() => ClassificationSchema.parse({ ...valid, ticket_created: true })).toThrow();
+    expect(() => ClassificationSchema.parse({ ...valid, assigned_provider_id: UUID })).toThrow();
   });
 
   it('rejects a missing field rather than defaulting it', () => {
@@ -807,7 +803,9 @@ describe('DocumentExtractionSchema', () => {
   });
 
   it('rejects a non-ISO date, per the extraction contract', () => {
-    expect(() => DocumentExtractionSchema.parse({ ...allNull, start_date: '01/01/2026' })).toThrow();
+    expect(() =>
+      DocumentExtractionSchema.parse({ ...allNull, start_date: '01/01/2026' }),
+    ).toThrow();
   });
 
   it('rejects an extra key and a missing field', () => {

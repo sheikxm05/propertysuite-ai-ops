@@ -232,9 +232,7 @@ describe('PaginationQuerySchema', () => {
   });
 
   it('caps the limit at 100 and rejects anything above it', () => {
-    expect(PaginationQuerySchema.parse({ limit: String(MAX_PAGE_SIZE) }).limit).toBe(
-      MAX_PAGE_SIZE,
-    );
+    expect(PaginationQuerySchema.parse({ limit: String(MAX_PAGE_SIZE) }).limit).toBe(MAX_PAGE_SIZE);
     expect(() => PaginationQuerySchema.parse({ limit: '101' })).toThrow();
     expect(() => PaginationQuerySchema.parse({ limit: '0' })).toThrow();
     expect(() => PaginationQuerySchema.parse({ limit: '-5' })).toThrow();

@@ -1,11 +1,7 @@
 import { z } from 'zod';
 
 import { MEMBER_ROLES } from '../constants/roles';
-import {
-  INVITATION_STATUSES,
-  MEMBER_STATUSES,
-  ORGANIZATION_STATUSES,
-} from '../constants/statuses';
+import { INVITATION_STATUSES, MEMBER_STATUSES, ORGANIZATION_STATUSES } from '../constants/statuses';
 import {
   EmailSchema,
   IsoDateTimeSchema,
@@ -116,9 +112,7 @@ export const RevokeInvitationSchema = z
 
 export type RevokeInvitationInput = z.infer<typeof RevokeInvitationSchema>;
 
-export const InvitationPathParamsSchema = z
-  .object({ invitationId: UuidSchema })
-  .strict();
+export const InvitationPathParamsSchema = z.object({ invitationId: UuidSchema }).strict();
 
 /** `GET /api/v1/members/invitations?cursor=&limit=&status=` */
 export const ListInvitationsQuerySchema = PaginationQuerySchema.extend({
@@ -148,9 +142,7 @@ export const ListMembersQuerySchema = PaginationQuerySchema.extend({
 
 export type ListMembersQuery = z.infer<typeof ListMembersQuerySchema>;
 
-export const OrganizationPathParamsSchema = z
-  .object({ organizationId: UuidSchema })
-  .strict();
+export const OrganizationPathParamsSchema = z.object({ organizationId: UuidSchema }).strict();
 
 export const MemberPathParamsSchema = z.object({ memberId: UuidSchema }).strict();
 

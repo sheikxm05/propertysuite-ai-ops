@@ -68,9 +68,7 @@ export const ListServiceProvidersQuerySchema = PaginationQuerySchema.extend({
 
 export type ListServiceProvidersQuery = z.infer<typeof ListServiceProvidersQuerySchema>;
 
-export const ServiceProviderPathParamsSchema = z
-  .object({ providerId: UuidSchema })
-  .strict();
+export const ServiceProviderPathParamsSchema = z.object({ providerId: UuidSchema }).strict();
 
 /* -------------------------------------------------------------------------- */
 /* Responses                                                                  */

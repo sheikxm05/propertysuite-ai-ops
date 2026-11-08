@@ -101,9 +101,7 @@ describe('resolvePriority — the model only suggests', () => {
   });
 
   it('treats a null or absent suggestion as no suggestion', () => {
-    expect(resolvePriority({ suggested_priority: null }, occupied('hvac')).priority).toBe(
-      'normal',
-    );
+    expect(resolvePriority({ suggested_priority: null }, occupied('hvac')).priority).toBe('normal');
     expect(resolvePriority({}, occupied('hvac')).priority).toBe('normal');
     expect(resolvePriority(null, occupied('hvac')).priority).toBe('normal');
   });
@@ -183,14 +181,17 @@ describe('resolvePriority — trusted escalations', () => {
   });
 
   it('never exceeds urgent however many signals stack', () => {
-    const decision = resolvePriority({ suggested_priority: 'urgent' }, {
-      category: 'structural',
-      hasActiveTenancy: true,
-      unitUninhabitable: true,
-      recurringOpenTickets: 99,
-      outsideBusinessHours: true,
-      currentPriority: 'urgent',
-    });
+    const decision = resolvePriority(
+      { suggested_priority: 'urgent' },
+      {
+        category: 'structural',
+        hasActiveTenancy: true,
+        unitUninhabitable: true,
+        recurringOpenTickets: 99,
+        outsideBusinessHours: true,
+        currentPriority: 'urgent',
+      },
+    );
     expect(decision.priority).toBe('urgent');
   });
 
@@ -327,13 +328,16 @@ describe('resolvePriority — purity and output shape', () => {
     for (const category of MAINTENANCE_CATEGORIES) {
       for (const suggested of [...TICKET_PRIORITIES, null]) {
         for (const hasActiveTenancy of [true, false]) {
-          const decision = resolvePriority({ suggested_priority: suggested }, {
-            category,
-            hasActiveTenancy,
-            unitUninhabitable: true,
-            recurringOpenTickets: 4,
-            outsideBusinessHours: true,
-          });
+          const decision = resolvePriority(
+            { suggested_priority: suggested },
+            {
+              category,
+              hasActiveTenancy,
+              unitUninhabitable: true,
+              recurringOpenTickets: 4,
+              outsideBusinessHours: true,
+            },
+          );
           expect(TICKET_PRIORITIES).toContain(decision.priority);
         }
       }

@@ -58,7 +58,8 @@ export const TICKET_PRIORITY_PARITY: Exactly<TicketPriority, DbTicketPriority> =
  * assertion starts guarding `MAINTENANCE_CATEGORIES` too. Until then this only
  * records that the column is deliberately `text`.
  */
-export type MaintenanceCategoryColumn = Database['public']['Tables']['maintenance_tickets']['Row']['category'];
+export type MaintenanceCategoryColumn =
+  Database['public']['Tables']['maintenance_tickets']['Row']['category'];
 
 export const MAINTENANCE_CATEGORY_IS_TEXT_COLUMN: Exactly<MaintenanceCategoryColumn, string> = true;
 

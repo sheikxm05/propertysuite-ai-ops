@@ -149,7 +149,8 @@ export const MONEY_SCALE = 2;
 export const MoneyAmountSchema = z
   .union([z.string().trim(), z.number()])
   .transform((raw, ctx): string => {
-    const text = typeof raw === 'number' ? (Number.isFinite(raw) ? raw.toFixed(MONEY_SCALE) : '') : raw;
+    const text =
+      typeof raw === 'number' ? (Number.isFinite(raw) ? raw.toFixed(MONEY_SCALE) : '') : raw;
 
     if (!MONEY_PATTERN.test(text)) {
       ctx.addIssue({
@@ -185,7 +186,9 @@ export function moneyToMinorUnits(canonicalAmount: string): number {
 /** Inverse of `moneyToMinorUnits`. */
 export function minorUnitsToMoney(minorUnits: number): string {
   const sign = minorUnits < 0 ? '-' : '';
-  const absolute = Math.abs(Math.trunc(minorUnits)).toString().padStart(MONEY_SCALE + 1, '0');
+  const absolute = Math.abs(Math.trunc(minorUnits))
+    .toString()
+    .padStart(MONEY_SCALE + 1, '0');
   const whole = absolute.slice(0, absolute.length - MONEY_SCALE);
   const fraction = absolute.slice(absolute.length - MONEY_SCALE);
   return `${sign}${whole}.${fraction}`;
@@ -231,12 +234,7 @@ export const BedroomsSchema = z.number().int().min(0).max(99);
 /* -------------------------------------------------------------------------- */
 
 export type JsonValue =
-  | string
-  | number
-  | boolean
-  | null
-  | JsonValue[]
-  | { [key: string]: JsonValue };
+  string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
 export const JsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
   z.union([

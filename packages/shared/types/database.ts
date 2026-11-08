@@ -1120,12 +1120,7 @@ export type Database = {
         | 'tenant'
         | 'service_provider';
       ticket_status:
-        | 'open'
-        | 'assigned'
-        | 'in_progress'
-        | 'awaiting_approval'
-        | 'completed'
-        | 'cancelled';
+        'open' | 'assigned' | 'in_progress' | 'awaiting_approval' | 'completed' | 'cancelled';
       ticket_priority: 'low' | 'normal' | 'high' | 'urgent';
     };
     CompositeTypes: { [_ in never]: never };

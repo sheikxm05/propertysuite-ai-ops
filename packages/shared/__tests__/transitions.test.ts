@@ -140,9 +140,7 @@ describe('canTransition — full matrix', () => {
 
   it('permits exactly 22 of them', () => {
     const permitted = TICKET_STATUSES.flatMap((from) =>
-      TICKET_STATUSES.flatMap((to) =>
-        MEMBER_ROLES.filter((role) => canTransition(from, to, role)),
-      ),
+      TICKET_STATUSES.flatMap((to) => MEMBER_ROLES.filter((role) => canTransition(from, to, role))),
     );
     expect(permitted).toHaveLength(EXPECTED_ALLOWED.length);
     expect(permitted).toHaveLength(22);
@@ -282,9 +280,7 @@ describe('allowedTransitionsFor', () => {
 
   it('returns a single next step for the assigned provider', () => {
     expect(allowedTransitionsFor('assigned', 'service_provider')).toEqual(['in_progress']);
-    expect(allowedTransitionsFor('in_progress', 'service_provider')).toEqual([
-      'awaiting_approval',
-    ]);
+    expect(allowedTransitionsFor('in_progress', 'service_provider')).toEqual(['awaiting_approval']);
     expect(allowedTransitionsFor('awaiting_approval', 'service_provider')).toEqual([]);
   });
 

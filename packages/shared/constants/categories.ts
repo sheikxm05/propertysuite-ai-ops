@@ -43,7 +43,5 @@ export const MAINTENANCE_CATEGORY_LABELS: Readonly<Record<MaintenanceCategory, s
   });
 
 export function isMaintenanceCategory(value: unknown): value is MaintenanceCategory {
-  return (
-    typeof value === 'string' && (MAINTENANCE_CATEGORIES as readonly string[]).includes(value)
-  );
+  return typeof value === 'string' && (MAINTENANCE_CATEGORIES as readonly string[]).includes(value);
 }

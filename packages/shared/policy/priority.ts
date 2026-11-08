@@ -27,30 +27,29 @@ import { PRIORITY_RANK, type TicketPriority } from '../constants/ticket-status';
  */
 
 /** Priority floor by category, before any escalation. */
-export const BASELINE_PRIORITY_BY_CATEGORY: Readonly<
-  Record<MaintenanceCategory, TicketPriority>
-> = Object.freeze({
-  /**
-   * Dubai: an air-conditioning failure in summer is a habitability problem, not
-   * a comfort complaint. It is the single most common ticket in this domain and
-   * the reason `hvac` is safety-sensitive below.
-   */
-  hvac: 'normal',
-  plumbing: 'normal',
-  /** Shock and fire risk. */
-  electrical: 'high',
-  appliance: 'normal',
-  /** Collapse, water ingress, structural cracking. */
-  structural: 'high',
-  pest_control: 'normal',
-  cleaning: 'low',
-  other: 'normal',
-  /**
-   * `unknown` means not yet classified, not "trivial". A middling baseline
-   * keeps an unclassified ticket visible until a human categorises it.
-   */
-  unknown: 'normal',
-});
+export const BASELINE_PRIORITY_BY_CATEGORY: Readonly<Record<MaintenanceCategory, TicketPriority>> =
+  Object.freeze({
+    /**
+     * Dubai: an air-conditioning failure in summer is a habitability problem, not
+     * a comfort complaint. It is the single most common ticket in this domain and
+     * the reason `hvac` is safety-sensitive below.
+     */
+    hvac: 'normal',
+    plumbing: 'normal',
+    /** Shock and fire risk. */
+    electrical: 'high',
+    appliance: 'normal',
+    /** Collapse, water ingress, structural cracking. */
+    structural: 'high',
+    pest_control: 'normal',
+    cleaning: 'low',
+    other: 'normal',
+    /**
+     * `unknown` means not yet classified, not "trivial". A middling baseline
+     * keeps an unclassified ticket visible until a human categorises it.
+     */
+    unknown: 'normal',
+  });
 
 /**
  * Categories where a trusted signal may escalate as far as `urgent`.
