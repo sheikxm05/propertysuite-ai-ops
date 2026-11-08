@@ -519,6 +519,36 @@ early rather than at the end of a wave.
 | **Parameter shadowed by a same-named column** (caught before it shipped)                                                  | Would have been a silent no-op                                                               | In a SQL-language function a column name outranks a same-named parameter, so `where u.property_id = property_id` compares the column to itself and is always true. It passes review, passes `create function`, and passes any probe that happens to send a consistent pair. Only a deliberately mismatched pair reveals it |
 | **Bare `$$` dollar-quoting collapses through a shell heredoc**                                                            | `as $$` silently became `as $`                                                               | Not a code defect but a toolchain hazard: any lane authoring SQL through a heredoc must use named tags (`$fn$`, `$ubp$`). Detected only by tallying dollar-tag counts before and after an edit                                                                                                                             |
 
+### 5.9c A18 is fail-closed, not strip-and-warn (a correction)
+
+Recorded because the orchestrator approved the wrong behaviour and a lane caught it.
+
+`w0-l5` observed that `listResponseSchema` is `.strict()` at the envelope while its item
+schema appeared to be a plain `z.object()`, and proposed turning the contract into an
+output allowlist that strips undeclared keys. The orchestrator approved it and asked for
+a warning log when stripping fired.
+
+**The premise was wrong.** Every item schema in `packages/shared/schemas/**` is
+`.strict()` — 96 occurrences across all eleven files. A strict object rejects an
+undeclared key, so `enforceSchema` throws and the route returns `INTERNAL_ERROR` 500.
+`w1-l4` found this while adopting `paginated()`, and the evidence was already on screen:
+`responses-strip.test.ts` was failing with `code: 'unrecognized_keys', keys: ['owner_email']`.
+
+**Ruling: keep fail-closed; delete the strip path and its warning.** The security
+outcome is identical either way — nothing undeclared reaches a client — but:
+
+- `.strict()` is a deliberate, universal choice; overriding it at the response layer
+  would create two truths about one schema.
+- The guarded condition (a route selecting a column its contract omits) is a programming
+  error, so failing in CI is better than silently correcting in production.
+- A silent strip masks genuine contract drift: a field the client needs would vanish
+  quietly instead of failing loudly.
+- **Dead code that looks like a security control is worse than none.** A future reader
+  would assume stripping protects them and select freely.
+
+The lesson for the orchestrator: an approval inherits the premise it was given. The
+premise was checkable in one grep and was not checked.
+
 ### 5.9b Finding 11 — TRUNCATE bypasses RLS (closed, with one residual)
 
 The most serious defect found in the project, and the one that best argues for applying
