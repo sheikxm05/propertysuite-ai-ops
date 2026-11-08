@@ -12,28 +12,40 @@
  * an HTTP round trip. A route that made its own authorization decision would be a
  * decision with no test behind it.
  *
- * ON THE LIST ENVELOPE: the body is `{ data, page_info }`, which is what
- * `listResponseSchema`/`TicketListResponseSchema` in `packages/shared` define. It is
- * emitted through `jsonResponse` from `lib/api/responses.ts` — the single JSON writer,
- * so the correlation header and `cache-control: no-store` still apply — rather than
- * through that module's `paginated()` helper, which returns a flat `{ data,
- * next_cursor }`. The two Wave 0 deliverables disagree and neither §5.2, §5.7 nor
- * `api-contracts.md` freezes a list envelope. Reported as a planning defect; the shared
- * schema wins here because five lanes import it and a response that does not satisfy
- * `TicketListResponseSchema` would make that schema dead code.
+ * ON THE LIST ENVELOPE: `{ data, page_info }` from `listResponseSchema` in
+ * `packages/shared`, emitted by `paginated()` (§5.7 amendment A18, which resolved the
+ * disagreement this route previously worked around by writing the body itself).
+ *
+ * `TicketListResponseSchema` is passed as the schema, so the body that ships is the
+ * PARSED one and no undeclared column can reach a client. One precision worth recording,
+ * because it differs from A18's general description: `TicketSchema` is `.strict()`, not a
+ * plain `z.object()`, so an undeclared key is REJECTED rather than stripped —
+ * `paginated()` raises `INTERNAL_ERROR` and a 500 ships instead of a quietly sanitised
+ * body. Either way nothing undeclared leaves the process, which is the property that
+ * matters; the strict variant just fails loudly, which is the better default for a
+ * contract this lane already satisfies by construction (`toTicket` builds the declared
+ * fields and nothing else).
+ *
+ * It earns its keep as the third guard, not the first. The §4 matrix limits a
+ * `service_provider` to a tenant's NAME, and row-level security cannot hide a column, so
+ * the chain is: explicit projections in the repository, narrow mappers in `view.ts`, and
+ * this contract — the only one of the three that still holds if someone later widens a
+ * `select`.
  */
 
 import {
   CreateTicketSchema,
   ListTicketsQuerySchema,
   TICKET_CREATE_ROLES,
+  TicketListResponseSchema,
   type CreateTicketInput,
   type ListTicketsQuery,
 } from '@shared/index';
 
-import { created, jsonResponse } from '@/lib/api/responses';
+import { created, paginated } from '@/lib/api/responses';
 import { withApiHandler } from '@/lib/api/with-handler';
 import {
+  asPageInfoInput,
   availableTransitions,
   createTicket,
   listTicketPage,
@@ -54,10 +66,9 @@ export const GET = withApiHandler<undefined, ListTicketsQuery>(
   { querySchema: ListTicketsQuerySchema },
   async (ctx) => {
     const page = await listTicketPage(maintenanceContextFrom(ctx), ctx.query);
-    return jsonResponse(
-      { data: page.items.map(toTicket), page_info: page.pageInfo },
-      ctx.requestId,
-    );
+    return paginated(page.items.map(toTicket), asPageInfoInput(page.pageInfo), ctx.requestId, {
+      schema: TicketListResponseSchema,
+    });
   },
 );
 

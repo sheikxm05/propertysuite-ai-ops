@@ -24,6 +24,23 @@ immutable timeline entry.
 Routes are thin adapters in `app/api/v1/maintenance/tickets/**`; pages are in
 `app/(dashboard)/maintenance/**`. Neither queries a table directly.
 
+### Pages
+
+| Route | What it is |
+| --- | --- |
+| `/maintenance` | the list — one screen that is five different screens |
+| `/maintenance/new` | the deterministic create form |
+| `/maintenance/[ticketId]` | detail, timeline, and the caller's available actions |
+| `/maintenance/report` | **hosts lane w1-l5's `ReportIssuePanel`** — tenants only |
+
+`/maintenance/report` exists because `features/ai-intake/nav.ts` reserves that href and
+the route group belongs to this lane, so w1-l5 could not create it. The page is a shell
+plus the panel: no form, no action, no fetch, and deliberately no shortcut to
+`POST /maintenance/tickets` — the panel owns its own draft-then-confirm flow, and "AI
+drafts, humans commit" only holds if no surface offers a way around the confirm.
+`tests/maintenance/ui.test.ts` asserts every enabled nav link into `/maintenance/**` has
+a page, so this cross-lane gap cannot silently reopen.
+
 ## The state machine lives in three places
 
 ```
@@ -66,6 +83,11 @@ Testing them in the other order would leak the graph: a provider probing
 - **Completion is an explicit human act.** `confirmed: true` is a literal, and only a
   manager, an admin or the reporting tenant may close — never the provider who did the
   work.
+- **Both list routes ship through their response contract.** `paginated()` with
+  `TicketListResponseSchema` / `ActivityListResponseSchema` (§5.7 amendment A18). Both
+  item schemas are `.strict()`, so an undeclared column is rejected — a loud 500 — rather
+  than stripped. Third guard after the repository's explicit projections and `view.ts`'s
+  narrow mappers, and the only one that survives someone widening a `select`.
 - **Evidence is verified, not created.** Uploads go through lane w1-l6's
   `POST /api/v1/documents/upload-url`; completion checks every cited document is
   already attached to this ticket. This lane writes no code under
@@ -73,7 +95,7 @@ Testing them in the other order would leak the graph: a provider probing
 
 ## Tests
 
-`tests/maintenance/**`, 424 cases, no database required:
+`tests/maintenance/**`, 433 cases, no database required:
 
 - `transitions.test.ts` — every ordered status pair × every role, derived from the
   shared tables rather than transcribed
@@ -82,8 +104,10 @@ Testing them in the other order would leak the graph: a provider probing
 - `priority.test.ts` — business hours and the escalations this lane supplies
 - `cursor.test.ts` — round trip, and that a hostile cursor cannot become a filter
 - `service.test.ts` — the domain service against a recording PostgREST double
-- `routes.test.ts` — status codes, the frozen envelope, and the audit row
-- `ui.test.ts` — registry wiring and the timeline's runtime status narrowing
+- `routes.test.ts` — status codes, the frozen envelope, the audit row, and the A18
+  output contract
+- `ui.test.ts` — registry wiring, the nav-link-has-a-page guard, and the timeline's
+  runtime status narrowing
 
 The second enforcement layer — the RLS policies and the `0003` trigger — is proven
 against a real database by `tests/rls/**` (lane w0-l6). See the header of

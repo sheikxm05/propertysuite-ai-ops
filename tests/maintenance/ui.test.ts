@@ -21,6 +21,9 @@
  * exercised.
  */
 
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import { MEMBER_ROLES, TICKET_STATUSES } from '@shared/index';
@@ -31,6 +34,7 @@ vi.mock('@/lib/supabase/server', () => ({
 }));
 
 import { NAV_REGISTRY, navForRole } from '@/config/nav.registry';
+import { navEntry as aiIntakeNav } from '@/features/ai-intake/nav';
 import { DASHBOARD_SLOTS, widgetsForRole } from '@/config/dashboard.slots';
 import { navEntry } from '@/features/maintenance/nav';
 import { renderedStatusValues } from '@/features/maintenance/components/activity-timeline';
@@ -84,5 +88,58 @@ describe('the dashboard widget', () => {
 describe('the timeline renders every status the shared enum defines', () => {
   it('narrows jsonb metadata against exactly TICKET_STATUSES', () => {
     expect([...renderedStatusValues()].sort()).toEqual([...TICKET_STATUSES].sort());
+  });
+});
+
+/**
+ * Every enabled sidebar link that points into this lane's route group has a page.
+ *
+ * This is the A17 lesson generalised. `features/ai-intake/nav.ts` points at
+ * `/maintenance/report`, which lives under `app/(dashboard)/maintenance/**` — w1-l4's
+ * glob — so w1-l5 could ship an enabled nav entry whose target this lane had not created,
+ * and the link 404'd for every tenant. The nav entry and the page are owned by different
+ * lanes, which is exactly the kind of gap a green per-lane gate hides.
+ *
+ * Filesystem existence rather than a render: the page is an async server component that
+ * resolves a session, so importing it proves nothing a 404 would not also allow.
+ */
+describe('no enabled nav link into /maintenance 404s', () => {
+  const ROOT = resolve(__dirname, '..', '..');
+
+  function pageExistsFor(href: string): boolean {
+    const segments = href.replace(/^\//, '');
+    return existsSync(resolve(ROOT, 'app', '(dashboard)', segments, 'page.tsx'));
+  }
+
+  const intoThisLane = NAV_REGISTRY.filter(
+    (entry) =>
+      entry.enabled && (entry.href === '/maintenance' || entry.href.startsWith('/maintenance/')),
+  );
+
+  it('finds the links it is supposed to be checking', () => {
+    // A canary: if the registry stopped pointing anything at /maintenance, every
+    // assertion below would pass vacuously.
+    expect(intoThisLane.length).toBeGreaterThanOrEqual(2);
+    expect(intoThisLane.map((entry) => entry.href)).toContain('/maintenance/report');
+  });
+
+  for (const entry of intoThisLane) {
+    it(`${entry.key} -> ${entry.href} has a page`, () => {
+      expect(pageExistsFor(entry.href)).toBe(true);
+    });
+  }
+});
+
+describe('the AI intake slot this lane hosts', () => {
+  it('is tenant-only, which is what /maintenance/report gates on', () => {
+    // §4 grants `ai_conversations` create to `tenant` alone. The page sends every other
+    // role to /maintenance/new rather than rendering a panel that would be refused by a
+    // Postgres policy on its first insert, so the page's gate must track this list.
+    expect([...aiIntakeNav.roles]).toEqual(['tenant']);
+  });
+
+  it('still points at the slot this lane created', () => {
+    expect(aiIntakeNav.href).toBe('/maintenance/report');
+    expect(aiIntakeNav.enabled).toBe(true);
   });
 });

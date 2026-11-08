@@ -8,7 +8,7 @@
  * never pass by coincidence.
  */
 
-import { TICKET_ID } from './fixtures';
+import { ACTIVITY_ID, TICKET_ID } from './fixtures';
 import type { Responder } from './fake-postgrest';
 import type {
   ActivityRow,
@@ -105,7 +105,10 @@ export function worldResponder(world: World): Responder {
         if (statement.kind === 'insert') {
           return {
             data: statement.values.map((values, index) => ({
-              id: `activity-${index}`,
+              // A real UUID, because the response contracts validate it as one. An
+              // `activity-0` placeholder made the double produce a row the API could
+              // never return, which is a fixture that proves less than it appears to.
+              id: index === 0 ? ACTIVITY_ID : withSuffix(ACTIVITY_ID, index),
               created_at: '2026-11-02T06:00:00.000+00:00',
               ...values,
             })),
@@ -126,4 +129,9 @@ function applied(
 ): unknown {
   if (!base) return patch ?? null;
   return { ...base, ...(patch ?? {}) };
+}
+
+/** A distinct but still well-formed UUID for the nth row of a multi-row insert. */
+function withSuffix(uuid: string, index: number): string {
+  return `${uuid.slice(0, -1)}${index.toString(16)}`;
 }

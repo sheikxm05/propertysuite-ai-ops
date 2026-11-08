@@ -195,10 +195,10 @@ export function countTransitionActivities(plan: readonly PlannedActivity[]): num
  * Upper bound on `maintenance_activities.description`, from `CreateActivitySchema`
  * (`boundedText(1, 1000)`) in `packages/shared`.
  *
- * Restated as a number, not as a second schema: `CompleteTicketSchema` permits a
- * `resolution_summary` of up to 2000 characters while the activity row that must hold it
- * permits 1000, and the service needs the bound as a value in order to reject the
- * overlap rather than truncate a permanent record. See the planning defect in this
- * lane's report.
+ * Restated as a number, not as a second schema: the service needs the bound as a VALUE
+ * in order to compare a summary's length against it. Amendment A20 lowered
+ * `CompleteTicketSchema.resolution_summary` to the same 1000 so the two can no longer
+ * disagree; `packages/shared/__tests__/schemas.test.ts` asserts the equality, and the
+ * service's own check is the backstop for a non-route caller.
  */
 export const ACTIVITY_DESCRIPTION_MAX_LENGTH = 1000;

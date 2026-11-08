@@ -676,9 +676,11 @@ export async function completeTicket(
 
   assertTicketTransition(subjectOf(ticket), 'completed', membership);
 
-  // `CompleteTicketSchema` permits 2000 characters; the activity row that must hold the
-  // summary permits 1000. Reject rather than truncate: `maintenance_activities` can
-  // never be amended, so a silently shortened resolution note is permanent.
+  // Belt and braces since amendment A20 lowered `CompleteTicketSchema` to 1000 to match
+  // `CreateActivitySchema.description`: the schema now rejects an over-long summary as a
+  // 400 before this runs. The guard stays because the service is callable from outside a
+  // route — and because rejecting is the only safe answer. `maintenance_activities` can
+  // never be amended, so a silently truncated resolution note would be permanent.
   if (input.resolution_summary.length > ACTIVITY_DESCRIPTION_MAX_LENGTH) {
     throw unprocessable({
       message: `The resolution summary must be ${ACTIVITY_DESCRIPTION_MAX_LENGTH} characters or fewer.`,

@@ -82,7 +82,12 @@ export {
   type UnitOption,
 } from './service';
 
-export { maintenanceContextFrom, ticketIdFrom, type RouteContextLike } from './route-support';
+export {
+  asPageInfoInput,
+  maintenanceContextFrom,
+  ticketIdFrom,
+  type RouteContextLike,
+} from './route-support';
 
 export {
   normaliseCategory,

@@ -17,11 +17,18 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { MemberRole } from '@shared/index';
+import {
+  ActivityListResponseSchema,
+  ActivitySchema,
+  TicketListResponseSchema,
+  TicketSchema,
+  type MemberRole,
+} from '@shared/index';
 
 import { fakePostgrest, type FakePostgrest } from './_support/fake-postgrest';
 import { worldResponder, type World } from './_support/world';
 import {
+  ACTIVITY_ID,
   DOCUMENT_ID,
   ORG_A,
   OTHER_PROVIDER_ID,
@@ -654,7 +661,7 @@ describe('maintenance activities routes', () => {
       ticket: ticketRow(),
       activities: [
         {
-          id: 'activity-1',
+          id: ACTIVITY_ID,
           organization_id: ORG_A,
           ticket_id: TICKET_ID,
           actor_profile_id: PROFILE_ID,
@@ -681,6 +688,101 @@ describe('maintenance activities routes', () => {
     expect(Object.keys(routeModule).sort()).toEqual(['GET', 'POST']);
   });
 });
+
+/* ================================================ the A18 output contract == */
+
+describe('both list routes ship through their response contract', () => {
+  it('emits exactly the keys TicketSchema declares, and no others', async () => {
+    scenario('property_manager', { ticketList: [ticketRow()] });
+    const response = await listTickets(request('GET', '/api/v1/maintenance/tickets'));
+    const payload = (await response.json()) as { data: Record<string, unknown>[] };
+
+    // The response is the PARSED body, so this is the contract's key set, not the
+    // repository's. If a `select` is ever widened, the extra column cannot reach here.
+    expect(Object.keys(payload.data[0] ?? {}).sort()).toEqual(
+      Object.keys(TicketSchema.shape).sort(),
+    );
+  });
+
+  it('emits exactly the keys ActivitySchema declares', async () => {
+    scenario('property_manager', {
+      ticket: ticketRow(),
+      activities: [
+        {
+          id: ACTIVITY_ID,
+          organization_id: ORG_A,
+          ticket_id: TICKET_ID,
+          actor_profile_id: PROFILE_ID,
+          activity_type: 'status_changed',
+          description: 'Status changed from open to assigned.',
+          metadata: { from_status: 'open', to_status: 'assigned' },
+          created_at: '2026-11-01T08:00:00.000+00:00',
+        },
+      ],
+    });
+    const response = await listActivities(
+      request('GET', `/api/v1/maintenance/tickets/${TICKET_ID}/activities`),
+      routeParams(),
+    );
+    const payload = (await response.json()) as { data: Record<string, unknown>[] };
+    expect(Object.keys(payload.data[0] ?? {}).sort()).toEqual(
+      Object.keys(ActivitySchema.shape).sort(),
+    );
+  });
+
+  it('FAILS CLOSED on an undeclared column rather than stripping it', () => {
+    // Worth stating precisely, because it differs from the general A18 behaviour:
+    // `TicketSchema` and `ActivitySchema` are `.strict()`, not plain `z.object()`. A
+    // plain object schema strips an undeclared key; a strict one REJECTS it, so
+    // `paginated()` raises INTERNAL_ERROR and a 500 ships instead of a sanitised body.
+    // Either way nothing undeclared reaches the client, which is the property that
+    // matters — but the failure is loud, and that is the better default for a contract
+    // this lane's `toTicket`/`toActivity` mappers already satisfy by construction.
+    const leaked = {
+      data: [{ ...TicketSchema.parse(sampleTicket()), tenant_email: 'leak@example.test' }],
+      page_info: { next_cursor: null, has_more: false, limit: 25 },
+    };
+    const result = TicketListResponseSchema.safeParse(leaked);
+    expect(result.success).toBe(false);
+
+    const leakedActivity = {
+      data: [{ ...sampleActivity(), actor_email: 'leak@example.test' }],
+      page_info: { next_cursor: null, has_more: false, limit: 25 },
+    };
+    expect(ActivityListResponseSchema.safeParse(leakedActivity).success).toBe(false);
+  });
+
+  it('rejects a malformed page_info before it can ship', () => {
+    expect(
+      TicketListResponseSchema.safeParse({
+        data: [],
+        page_info: { next_cursor: null, has_more: undefined, limit: 25 },
+      }).success,
+    ).toBe(false);
+  });
+});
+
+function sampleTicket() {
+  const row = ticketRow();
+  return {
+    ...row,
+    category: 'hvac' as const,
+    source: 'web' as const,
+  };
+}
+
+function sampleActivity() {
+  return {
+    id: ACTIVITY_ID,
+    organization_id: ORG_A,
+    ticket_id: TICKET_ID,
+    actor_profile_id: PROFILE_ID,
+    activity_type: 'comment_added' as const,
+    description: 'Noted.',
+    metadata: {},
+    created_at: '2026-11-01T08:00:00.000+00:00',
+  };
+}
 
 describe('no route in this lane exposes DELETE', () => {
   it('holds for every maintenance route', async () => {

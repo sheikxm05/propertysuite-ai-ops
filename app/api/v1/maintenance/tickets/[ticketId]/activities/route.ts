@@ -16,17 +16,19 @@
  */
 
 import {
+  ActivityListResponseSchema,
   CreateActivitySchema,
   ListActivitiesQuerySchema,
   type CreateActivityInput,
   type ListActivitiesQuery,
 } from '@shared/index';
 
-import { created, jsonResponse } from '@/lib/api/responses';
+import { created, paginated } from '@/lib/api/responses';
 import { withApiHandler } from '@/lib/api/with-handler';
 import {
   TICKET_TRANSITION_ROLES,
   appendActivity,
+  asPageInfoInput,
   listTicketActivities,
   maintenanceContextFrom,
   ticketIdFrom,
@@ -38,8 +40,10 @@ import {
  * `property_owner`, whose read is scoped by `maintenance_activities_select_owner` and
  * re-checked in application space against `properties.owner_member_id`.
  *
- * `{ data, page_info }` matches `ActivityListResponseSchema` in `packages/shared` — see
- * the envelope note in `../../route.ts`.
+ * `{ data, page_info }` via `paginated()` with `ActivityListResponseSchema` as the output
+ * allowlist (§5.7 amendment A18) — see the envelope note in `../../route.ts`. The
+ * allowlist earns its keep on this route too: `maintenance_activities.metadata` is a
+ * `jsonb` column on an append-only table, and the schema bounds what of it ships.
  */
 export const GET = withApiHandler<undefined, ListActivitiesQuery>(
   { querySchema: ListActivitiesQuerySchema },
@@ -49,10 +53,9 @@ export const GET = withApiHandler<undefined, ListActivitiesQuery>(
       ticketIdFrom(ctx.params),
       ctx.query,
     );
-    return jsonResponse(
-      { data: page.items.map(toActivity), page_info: page.pageInfo },
-      ctx.requestId,
-    );
+    return paginated(page.items.map(toActivity), asPageInfoInput(page.pageInfo), ctx.requestId, {
+      schema: ActivityListResponseSchema,
+    });
   },
 );
 

@@ -34,6 +34,7 @@ export const TENANT_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 export const OTHER_TENANT_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 export const PROFILE_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 export const OWNER_MEMBER_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+export const ACTIVITY_ID = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
 
 export interface MembershipOverrides {
   organizationId?: string;
