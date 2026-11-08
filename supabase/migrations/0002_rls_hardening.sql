@@ -19,6 +19,28 @@
 --                                            route through 0003's security definer RPCs.
 --                                            No INSERT policy is added here, by design.
 --
+-- Plus one defect found only by attacking the live database, after every policy
+-- in this file was already in place and verified:
+--  11  TRUNCATE granted to authenticated   -> revoked in §4a by loop, and removed
+--      on all 15 tenant-scoped tables.        from the schema default privileges.
+--      TRUNCATE IGNORES RLS, so no policy     An authenticated principal with NO
+--      here was ever in its path.             membership in ANY organization could
+--                                             erase every tenant's data in 15
+--                                             statements. §7 now asserts against it.
+--
+-- STANDING REQUIREMENT FOR LATER MIGRATIONS. §4a revokes TRUNCATE from every
+-- table that exists when 0002 runs, and also strips it from the schema default
+-- privileges so later tables do not inherit it. If the default-privileges step
+-- emits its warning — it needs membership in the grantor role and the migration
+-- role may not have it — then that second protection is absent, and ANY later
+-- migration that creates a table in `public` MUST re-run the revoke loop from
+-- §4a. The §7 assertion is the backstop: it fails the migration rather than
+-- letting a single new table silently reopen total data destruction.
+--
+-- The default grant also carries REFERENCES and TRIGGER. Both were considered
+-- and deliberately left in place; the reasoning is recorded in §4a so the next
+-- reader can see the privilege enumeration was complete rather than partial.
+--
 -- ORCHESTRATOR AMENDMENTS to the §4 matrix, adjudicated after this lane reported
 -- them as planning defects. The matrix in implementation-plan.md §4 is amended;
 -- this file implements the amended form:
@@ -395,6 +417,167 @@ revoke update, delete on public.maintenance_activities from anon, authenticated;
 -- `log_audit()` security definer helper or by the service-role client, never by a
 -- client session. Organization admins read it; nobody edits it.
 revoke insert, update, delete on public.audit_logs from anon, authenticated;
+
+
+-- -----------------------------------------------------------------------------
+-- 4a. TRUNCATE — finding 11, the most serious defect found in this project
+-- -----------------------------------------------------------------------------
+-- TRUNCATE IGNORES ROW LEVEL SECURITY COMPLETELY. It is not a filtered DELETE:
+-- no policy is consulted, so none of the 69 policies in this file were ever in
+-- its path. Supabase ships
+--     alter default privileges in schema public grant all on tables to authenticated, anon
+-- and "all" includes TRUNCATE, so every table arrived with it granted.
+--
+-- Proven live against an authenticated principal with NO membership in ANY
+-- organization: `truncate public.audit_logs` succeeded and left zero audit rows.
+-- Any authenticated user, including a brand-new signup, could have erased every
+-- organization's properties, units, tenants, tenancies, tickets, documents,
+-- memberships, profiles and the whole audit trail in fifteen statements. Total
+-- multi-tenant data destruction, underneath the entire security model.
+--
+-- Why it survived review: §4 above revokes UPDATE and DELETE and those were
+-- verified, and the plan recorded TRUNCATE only for `maintenance_activities`,
+-- where 0003's trigger happens to cover it. Nothing said "enumerate every
+-- privilege Supabase grants by default".
+--
+-- PRIVILEGE ENUMERATION, done deliberately so the next reader knows it was not
+-- partial. Supabase's default grant covers SELECT, INSERT, UPDATE, DELETE,
+-- TRUNCATE, REFERENCES and TRIGGER:
+--   * SELECT/INSERT/UPDATE  — intended, and governed by the policies above.
+--   * DELETE                — revoked in §4. Archive is the model.
+--   * TRUNCATE              — revoked here. Bypasses RLS; no legitimate client use.
+--   * REFERENCES            — CONSIDERED AND DEFERRED. Lets a client add a foreign
+--                             key pointing at these tables. Not a read, write or
+--                             destruction path on its own; the worst case is
+--                             nuisance referential coupling from a table the
+--                             client would also have to own. Left granted.
+--   * TRIGGER               — CONSIDERED AND DEFERRED. Lets a client attach a
+--                             trigger to a table it owns. `authenticated` owns no
+--                             table in this schema, so it has nothing to attach a
+--                             trigger to. Left granted.
+-- If either is ever revisited, revoke it in a later migration, not by editing
+-- this block.
+
+-- Revoked by LOOP, not by a hand-written list of fifteen tables: a future
+-- migration that adds a tenant-scoped table would silently reopen the hole.
+-- Covers 'r' (ordinary) and 'p' (partitioned) relations.
+do $trunc$
+declare
+  rec record;
+  touched int := 0;
+begin
+  for rec in
+    select c.relname
+    from pg_catalog.pg_class c
+    join pg_catalog.pg_namespace ns on ns.oid = c.relnamespace
+    where ns.nspname = 'public'
+      and c.relkind in ('r', 'p')
+    order by c.relname
+  loop
+    execute format(
+      'revoke truncate on public.%I from authenticated, anon', rec.relname
+    );
+    touched := touched + 1;
+  end loop;
+
+  raise notice
+    'migration 0002: TRUNCATE revoked from authenticated and anon on % table(s) in schema public',
+    touched;
+end
+$trunc$;
+
+-- Fix the SOURCE as well as the symptom: without this, a table created by 0004
+-- or later inherits TRUNCATE from the default privileges and the hole reopens
+-- for that table alone — which the loop above, having already run, would not
+-- catch.
+--
+-- ALTER DEFAULT PRIVILEGES is per grantor role, so revoking it for the current
+-- role is not sufficient: it must be revoked for every role that holds a default
+-- ACL on tables in `public` (on Supabase typically `postgres` and/or
+-- `supabase_admin`). Doing that requires membership in each such role, which the
+-- migration role may not have — so each attempt is made individually and a
+-- failure DOWNGRADES TO A WARNING rather than aborting the migration. If the
+-- warning fires, the standing requirement in the header applies: any later
+-- migration that adds a table must re-run the revoke loop above.
+do $defacl$
+declare
+  grantor   text;
+  unreached text[] := '{}';
+  reached   int    := 0;
+begin
+  for grantor in
+    select distinct pg_catalog.pg_get_userbyid(d.defaclrole)
+    from pg_catalog.pg_default_acl d
+    join pg_catalog.pg_namespace ns on ns.oid = d.defaclnamespace
+    where ns.nspname = 'public'
+      and d.defaclobjtype = 'r'
+  loop
+    begin
+      execute format(
+        'alter default privileges for role %I in schema public '
+        'revoke truncate on tables from authenticated, anon',
+        grantor
+      );
+      reached := reached + 1;
+    exception
+      when insufficient_privilege then
+        unreached := unreached || grantor;
+    end;
+  end loop;
+
+  -- Also pin it for the migration role itself, which may hold no default ACL yet
+  -- and therefore not appear in the loop above.
+  begin
+    execute 'alter default privileges in schema public '
+            'revoke truncate on tables from authenticated, anon';
+  exception
+    when insufficient_privilege then
+      unreached := unreached || current_user::text;
+  end;
+
+  if array_length(unreached, 1) is not null then
+    raise warning
+      'migration 0002: could not revoke TRUNCATE from the default privileges of role(s) %. A table created later by those roles will inherit TRUNCATE for authenticated/anon. Any migration that adds a table MUST re-run the revoke loop in section 4a.',
+      array_to_string(unreached, ', ');
+  else
+    raise notice
+      'migration 0002: TRUNCATE removed from the default privileges of % grantor role(s); tables added later do not inherit it',
+      reached;
+  end if;
+end
+$defacl$;
+
+-- The same default grant reaches `storage.objects`, where a TRUNCATE would erase
+-- every file's metadata for every organization at once. This lane does not own
+-- the storage schema and cannot be certain the migration role may alter its
+-- privileges, so the attempt is best-effort and warns instead of aborting.
+-- REPORTED TO THE ORCHESTRATOR for live measurement — treat the warning, if it
+-- appears, as an open finding rather than noise.
+do $trunc_storage$
+declare
+  rec record;
+begin
+  for rec in
+    select c.relname
+    from pg_catalog.pg_class c
+    join pg_catalog.pg_namespace ns on ns.oid = c.relnamespace
+    where ns.nspname = 'storage'
+      and c.relkind in ('r', 'p')
+    order by c.relname
+  loop
+    begin
+      execute format(
+        'revoke truncate on storage.%I from authenticated, anon', rec.relname
+      );
+    exception
+      when insufficient_privilege then
+        raise warning
+          'migration 0002: could not revoke TRUNCATE on storage.% from authenticated/anon - verify this privilege on the live database.',
+          rec.relname;
+    end;
+  end loop;
+end
+$trunc_storage$;
 
 
 -- =============================================================================
@@ -1566,6 +1749,36 @@ begin
   if offending is not null then
     raise exception
       'migration 0002: DELETE or FOR ALL policy present on a tenant-scoped table: %', offending;
+  end if;
+
+  -- Finding 11. TRUNCATE bypasses RLS entirely, so a single grant here voids
+  -- every policy in this file at once. This is the assertion that would have
+  -- caught the original hole on the very first apply, and it is deliberately
+  -- stricter than the revoke above in two ways: it covers EVERY table in
+  -- `public` rather than the 15 known tenant-scoped ones, and it tests the
+  -- EFFECTIVE privilege via has_table_privilege, so a grant inherited through
+  -- PUBLIC or through role membership is caught and not just a direct grant.
+  -- Only roles that actually exist are probed, because has_table_privilege
+  -- errors on an unknown role name.
+  select string_agg(format('%s(%s)', t.relname, t.who), ', ' order by t.relname, t.who)
+    into offending
+  from (
+    select c.relname, g.rolname as who
+    from pg_catalog.pg_class c
+    join pg_catalog.pg_namespace ns on ns.oid = c.relnamespace
+    cross join (
+      select rolname
+      from pg_catalog.pg_roles
+      where rolname in ('authenticated', 'anon')
+    ) g
+    where ns.nspname = 'public'
+      and c.relkind in ('r', 'p')
+      and pg_catalog.has_table_privilege(g.rolname, c.oid, 'TRUNCATE')
+  ) t;
+
+  if offending is not null then
+    raise exception
+      'migration 0002: TRUNCATE is still granted in schema public, which bypasses RLS and voids every policy in this migration: %', offending;
   end if;
 
   -- Amendment B, ordering guard. Once 0003 has added documents.ticket_id there is
