@@ -52,6 +52,16 @@ const PROTECTED_PREFIXES = [
  */
 const AUTH_PREFIXES = ['/sign-in', '/sign-up', '/forgot-password', '/accept-invitation'] as const;
 
+/**
+ * Auth slugs that an ALREADY signed-in visitor must still be allowed to reach.
+ *
+ * `/accept-invitation` is the whole list, and it is not an exception so much as the
+ * point: `0003`'s `accept_invitation(p_token)` requires `auth.uid()`, so the one auth
+ * slug that *needs* an authenticated caller was the one the signed-in redirect bounced.
+ * A17 froze the slug and this gate made it a dead end for its only purpose.
+ */
+const AUTH_PREFIXES_ALLOWED_WHEN_SIGNED_IN = ['/accept-invitation'] as const;
+
 /** Where an unauthenticated visitor is sent. */
 const SIGN_IN_PATH = '/sign-in';
 
@@ -76,7 +86,7 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
     return copyCookies(NextResponse.redirect(target), response);
   }
 
-  if (userId && isAuthPage(pathname)) {
+  if (userId && isAuthPage(pathname) && !isAuthPageAllowedWhenSignedIn(pathname)) {
     const target = request.nextUrl.clone();
     target.pathname = resolveReturnTo(request.nextUrl.searchParams.get(RETURN_TO));
     target.search = '';
@@ -129,6 +139,19 @@ function isProtected(pathname: string): boolean {
 
 function isAuthPage(pathname: string): boolean {
   return AUTH_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+}
+
+/**
+ * Whether a signed-in visitor may stay on this auth page instead of being redirected.
+ *
+ * The session is still refreshed either way — the redirect is all that is skipped — so an
+ * invitee arriving with a valid cookie reaches the accept page with a live session, which
+ * is exactly what `accept_invitation` needs.
+ */
+function isAuthPageAllowedWhenSignedIn(pathname: string): boolean {
+  return AUTH_PREFIXES_ALLOWED_WHEN_SIGNED_IN.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+  );
 }
 
 /**

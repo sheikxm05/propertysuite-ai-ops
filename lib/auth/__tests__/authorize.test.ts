@@ -35,11 +35,13 @@ const PROFILE = '22222222-2222-2222-2222-222222222222';
 const MEMBER = '33333333-3333-3333-3333-333333333333';
 const TENANT = '44444444-4444-4444-4444-444444444444';
 const PROVIDER = '55555555-5555-5555-5555-555555555555';
+const TICKET = '66666666-6666-6666-6666-666666666666';
 
 const OTHER_PROFILE = '2222aaaa-2222-2222-2222-222222222222';
 const OTHER_MEMBER = '3333aaaa-3333-3333-3333-333333333333';
 const OTHER_TENANT = '4444aaaa-4444-4444-4444-444444444444';
 const OTHER_PROVIDER = '5555aaaa-5555-5555-5555-555555555555';
+const OTHER_TICKET = '6666aaaa-6666-6666-6666-666666666666';
 
 type Role = (typeof ROLES)[number];
 const ROLES = knownRoles();
@@ -66,6 +68,11 @@ function ownRow(type: ResourceType): ResourceRef {
     tenantId: TENANT,
     providerId: PROVIDER,
     profileId: PROFILE,
+    // Document facts (§4 amendment A7). Only the `document` policies read these; every
+    // other table ignores them. `propertyId` and `tenancyId` stay absent because that is
+    // what provider evidence looks like.
+    ticketId: TICKET,
+    uploadedBy: PROFILE,
   };
 }
 
@@ -78,6 +85,8 @@ function foreignRow(type: ResourceType): ResourceRef {
     tenantId: OTHER_TENANT,
     providerId: OTHER_PROVIDER,
     profileId: OTHER_PROFILE,
+    ticketId: OTHER_TICKET,
+    uploadedBy: OTHER_PROFILE,
   };
 }
 
@@ -190,13 +199,15 @@ const MATRIX: Record<ResourceType, Record<string, Expectation>> = {
     service_provider: { r: T, c: T, u: F, a: F, fr: F },
   },
 
-  // documents | RW staff | R owned | R own tenancy | —
+  // documents | RW staff | R owned | R own tenancy | CR assigned-ticket evidence.
+  // Amendment A7 gave the provider INSERT and SELECT on evidence whose `ticket_id`
+  // resolves to a ticket assigned to them — never a tenancy or property document.
   document: {
     organization_admin: { r: T, c: T, u: T, a: F, fr: T },
     property_manager: { r: T, c: T, u: T, a: F, fr: T },
     property_owner: { r: T, c: F, u: F, a: F, fr: F },
     tenant: { r: T, c: F, u: F, a: F, fr: F },
-    service_provider: { r: F, c: F, u: F, a: F, fr: F },
+    service_provider: { r: T, c: T, u: F, a: F, fr: F },
   },
 
   // ai_conversations | R staff | — | CR own | —
@@ -551,5 +562,94 @@ describe('administrator activity append (§4 amendment A8)', () => {
     expect(
       authorize(membershipFor('property_owner'), 'create', ownRow('maintenance_activity')).allowed,
     ).toBe(false);
+  });
+});
+
+describe('provider evidence on documents (§4 amendment A7)', () => {
+  const provider = () => membershipFor('service_provider');
+
+  /** Evidence on a ticket assigned to the caller, uploaded by the caller. */
+  const evidence = (overrides: Partial<ResourceRef> = {}): ResourceRef => ({
+    type: 'document',
+    organizationId: ORG_A,
+    ticketId: TICKET,
+    providerId: PROVIDER,
+    uploadedBy: PROFILE,
+    ...overrides,
+  });
+
+  it('lets a provider read evidence on their assigned ticket', () => {
+    const decision = authorize(provider(), 'read', evidence());
+    expect(decision.allowed).toBe(true);
+    expect(decision.reason).toBe('assigned_ticket_evidence');
+  });
+
+  it('lets a provider append evidence to their assigned ticket', () => {
+    expect(authorize(provider(), 'create', evidence()).allowed).toBe(true);
+  });
+
+  it('refuses a document with no ticket — the tenancy-contract boundary', () => {
+    // `ticket_id is not null` is what structurally keeps a provider out of contracts
+    // and deeds, whatever the rest of the row looks like.
+    for (const action of ['read', 'create'] as Action[]) {
+      const decision = authorize(provider(), action, evidence({ ticketId: null }));
+      expect(decision.allowed, action).toBe(false);
+      expect(decision.reason, action).toBe('evidence_requires_ticket');
+    }
+  });
+
+  it("refuses evidence on another provider's ticket", () => {
+    const decision = authorize(provider(), 'read', evidence({ providerId: OTHER_PROVIDER }));
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toBe('assigned_ticket_evidence_only');
+  });
+
+  it('refuses an unassigned ticket, where the row names no provider', () => {
+    expect(authorize(provider(), 'read', evidence({ providerId: null })).allowed).toBe(false);
+  });
+
+  it('refuses evidence attributed to somebody else', () => {
+    const decision = authorize(provider(), 'create', evidence({ uploadedBy: OTHER_PROFILE }));
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toBe('evidence_uploader_must_be_self');
+  });
+
+  it('refuses evidence with no uploader recorded', () => {
+    expect(authorize(provider(), 'create', evidence({ uploadedBy: null })).allowed).toBe(false);
+  });
+
+  it('refuses evidence stapled onto a tenancy — the tenant would read it', () => {
+    // 0002 forces tenancy_id and property_id NULL on that INSERT. A provider who could
+    // set either would expose their upload to that tenancy's tenant, who reads their own
+    // tenancy documents by right.
+    const decision = authorize(provider(), 'create', evidence({ tenancyId: TENANT }));
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toBe('evidence_must_not_target_property_or_tenancy');
+  });
+
+  it('refuses evidence stapled onto a property', () => {
+    expect(
+      authorize(
+        provider(),
+        'create',
+        evidence({ propertyId: '77777777-7777-7777-7777-777777777777' }),
+      ).allowed,
+    ).toBe(false);
+  });
+
+  it('still refuses update, archive and delete — 0002 grants neither', () => {
+    for (const action of ['update', 'archive', 'delete'] as Action[]) {
+      expect(authorize(provider(), action, evidence()).allowed, action).toBe(false);
+    }
+  });
+
+  it('refuses evidence from another organization even when every other clause matches', () => {
+    const decision = authorize(provider(), 'read', evidence({ organizationId: ORG_B }));
+    expect(decision).toEqual({ allowed: false, reason: 'cross_organization' });
+  });
+
+  it('grants no evidence access to a property owner or a tenant through this path', () => {
+    expect(authorize(membershipFor('property_owner'), 'create', evidence()).allowed).toBe(false);
+    expect(authorize(membershipFor('tenant'), 'create', evidence()).allowed).toBe(false);
   });
 });

@@ -75,6 +75,21 @@ export interface ResourceRef {
   providerId?: string | null;
   /** The `profiles.id` the row belongs to, for self-only rules. */
   profileId?: string | null;
+
+  /* --- documents (§4 amendment A7) ------------------------------------- */
+
+  /**
+   * `documents.ticket_id`. Non-null is what makes a document *evidence* rather than a
+   * contract, and it is the structural reason a service provider can reach the one and
+   * not the other.
+   */
+  ticketId?: string | null;
+  /** `documents.uploaded_by`, a `profiles.id`. */
+  uploadedBy?: string | null;
+  /** `documents.property_id`. Must be null on provider evidence. */
+  propertyId?: string | null;
+  /** `documents.tenancy_id`. Must be null on provider evidence. */
+  tenancyId?: string | null;
 }
 
 export interface AuthorizationDecision {
@@ -302,12 +317,16 @@ const POLICIES: Record<ResourceType, Record<MemberRole, Rule>> = {
     service_provider: appendOnly(isOwnProvider, 'assigned_ticket_activity'),
   },
 
+  /**
+   * A provider reads and appends ticket evidence and nothing else (§4 amendment A7).
+   * See `providerDocumentRule` for why `ticket_id is not null` is the whole boundary.
+   */
   document: {
     organization_admin: staffWrite(false),
     property_manager: staffWrite(false),
     property_owner: readOnly(isOwnedProperty, 'owned_property_document'),
     tenant: readOnly(isOwnTenant, 'own_tenancy_document'),
-    service_provider: NONE,
+    service_provider: providerDocumentRule,
   },
 
   /** A tenant starts conversations; staff read them. Nobody updates one. */
@@ -385,6 +404,53 @@ function profileRule(
     // Includes `create`: profile rows are never created by a client.
     return DENY('profile_write_not_permitted');
   };
+}
+
+/**
+ * A `service_provider` over `documents` (§4 amendment A7).
+ *
+ * The matrix originally gave a provider nothing here, and `requirements.md` §3 —
+ * "provider adds completion evidence" — was therefore unimplementable in application
+ * space while `0002`'s `documents_insert_provider_assigned` and
+ * `documents_select_provider_assigned` permitted it in Postgres. This is the same
+ * predicate, clause for clause, so the two layers agree.
+ *
+ * `ticketId != null` is the load-bearing clause in both directions. It is what lets a
+ * provider reach evidence on a job they are assigned, and it is what structurally keeps
+ * them out of tenancy contracts and property deeds — those rows have a null `ticket_id`,
+ * so no provider predicate can ever match them however the rest of the row looks.
+ *
+ * On create, two further clauses. `uploadedBy` must be the caller, so a provider cannot
+ * attribute evidence to somebody else. `propertyId` and `tenancyId` must both be absent —
+ * `0002` forces them NULL on that INSERT, and this mirrors it, because a provider who
+ * could staple evidence onto an arbitrary tenancy would expose their upload to that
+ * tenancy's tenant, who reads their own tenancy documents by right.
+ *
+ * Update, archive and delete stay denied: `0002` grants a provider neither UPDATE nor
+ * DELETE on `documents`.
+ */
+function providerDocumentRule(
+  m: Membership,
+  r: ResourceRef,
+  action: Action,
+): AuthorizationDecision {
+  if (action !== 'read' && action !== 'create') return DENY('provider_document_write_denied');
+
+  // Evidence only. A contract or a deed has no ticket.
+  if (r.ticketId == null) return DENY('evidence_requires_ticket');
+
+  // The ticket must be assigned to this provider.
+  if (!isOwnProvider(m, r)) return DENY('assigned_ticket_evidence_only');
+
+  if (action === 'read') return ALLOW('assigned_ticket_evidence');
+
+  if (r.uploadedBy == null || r.uploadedBy !== m.profile.id) {
+    return DENY('evidence_uploader_must_be_self');
+  }
+  if (r.propertyId != null || r.tenancyId != null) {
+    return DENY('evidence_must_not_target_property_or_tenancy');
+  }
+  return ALLOW('assigned_ticket_evidence');
 }
 
 /** Create and read, never update, archive or delete. For immutable tables. */

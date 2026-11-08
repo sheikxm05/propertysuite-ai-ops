@@ -56,25 +56,113 @@ export interface ResponseInitLike {
   headers?: Record<string, string>;
 }
 
-/** 200 with `{ data }`. */
-export function ok<T>(data: T, requestId: string, init: ResponseInitLike = {}): Response {
-  return jsonResponse({ data }, requestId, { status: 200, ...init });
+/**
+ * Schema enforcement options, shared by every success helper.
+ *
+ * Passing `schema` validates the body against its own contract before it ships. Every
+ * item schema in `packages/shared/schemas/**` is `.strict()` — 96 of them across all
+ * eleven files — so an undeclared key is **rejected**, not stripped, and the response
+ * becomes a 500.
+ *
+ * That is fail-closed on purpose. The condition it catches is a route selecting a column
+ * its own contract does not declare, which is a programming error rather than an attack:
+ * nothing undeclared reaches the client, and CI runs the full suite, so it fails in front
+ * of a developer instead of in front of a user. Rejecting also surfaces genuine contract
+ * drift — a field the client needs but the schema forgot — which a silent strip would
+ * hide.
+ *
+ * **If this throws, the fix is the route's `select`, not a looser schema.** Relaxing an
+ * item schema to make a response pass would create two different truths about one
+ * contract and quietly reopen the leak the schema was closing.
+ */
+export interface SchemaEnforcement {
+  /** The **envelope** schema — `resourceResponseSchema(X)` or `listResponseSchema(X)`. */
+  schema?: z.ZodTypeAny;
+}
+
+/**
+ * Validates a body against its contract and returns what should ship.
+ *
+ * A failure raises `INTERNAL_ERROR`: the shape is ours to get right and the request is
+ * not at fault. The offending body is never logged or returned — only the issue count and
+ * the offending key NAMES, because a value could be exactly the personal data the
+ * rejection just stopped.
+ */
+function enforceSchema(
+  body: Record<string, unknown>,
+  enforcement: SchemaEnforcement,
+  reason: string,
+): unknown {
+  const { schema } = enforcement;
+  if (!schema) return body;
+
+  const result = schema.safeParse(body);
+  if (!result.success) {
+    throw new ApiRouteError('INTERNAL_ERROR', {
+      logFields: {
+        reason,
+        count: result.error.issues.length,
+        unexpected_fields: unrecognisedKeys(result.error),
+      },
+      cause: result.error,
+    });
+  }
+
+  return result.data;
+}
+
+/**
+ * The key names a `.strict()` schema refused, for the log line only.
+ *
+ * Names, de-duplicated and sorted — never values.
+ */
+function unrecognisedKeys(error: z.ZodError): string[] {
+  const names = new Set<string>();
+  for (const issue of error.issues) {
+    if (issue.code === 'unrecognized_keys') {
+      for (const key of issue.keys) names.add(key);
+    }
+  }
+  return Array.from(names).sort();
+}
+
+/**
+ * 200 with `{ data }`.
+ *
+ * Pass `schema` — `resourceResponseSchema(X)`, or a prebuilt `*ResponseSchema` — and the
+ * body is validated against it. `GET /properties/{propertyId}` has exactly the
+ * over-select exposure a list route has, so the single-resource path gets the same check.
+ */
+export function ok<T>(
+  data: T,
+  requestId: string,
+  init: ResponseInitLike & SchemaEnforcement = {},
+): Response {
+  const { schema, ...responseInit } = init;
+  const body = enforceSchema({ data }, { schema }, 'resource_response_schema_rejected');
+  return jsonResponse(body, requestId, { status: 200, ...responseInit });
 }
 
 /** 201 with `{ data }`, and `Location` when the created resource has a canonical URL. */
 export function created<T>(
   data: T,
   requestId: string,
-  options: { location?: string } = {},
+  options: { location?: string } & SchemaEnforcement = {},
 ): Response {
   const headers: Record<string, string> = {};
   if (options.location) headers.Location = options.location;
-  return jsonResponse({ data }, requestId, { status: 201, headers });
+  const body = enforceSchema(
+    { data },
+    { schema: options.schema },
+    'resource_response_schema_rejected',
+  );
+  return jsonResponse(body, requestId, { status: 201, headers });
 }
 
 /** 202 for work handed to a queue. The body carries whatever identifies the work. */
-export function accepted<T>(data: T, requestId: string): Response {
-  return jsonResponse({ data }, requestId, { status: 202 });
+export function accepted<T>(data: T, requestId: string, options: SchemaEnforcement = {}): Response {
+  const body = enforceSchema({ data }, options, 'resource_response_schema_rejected');
+  return jsonResponse(body, requestId, { status: 202 });
 }
 
 /**
@@ -104,24 +192,19 @@ export interface PageInfoInput {
 /**
  * 200 with a cursor page, in the `listResponseSchema()` shape (§5.7 amendment A18).
  *
- * Pass the route's own `*ListResponseSchema` as `options.schema` and the **parsed** body
- * is what ships. That makes the schema an output allowlist, not just a check:
- * `listResponseSchema` is `.strict()` at the envelope, and its item schema is a plain
- * `z.object()`, which *strips* keys it does not declare rather than rejecting them. So a
- * route that over-selects — `select('*')` on a `tenants` row the §4 matrix limited to the
- * name — has the extra column removed before it leaves the process instead of leaking it
- * while every isolation test stays green.
- *
- * An envelope-level failure is a defect in our code, not in the request, so it raises
- * `INTERNAL_ERROR`. The offending body is never logged or returned.
+ * Pass the route's own `*ListResponseSchema` as `options.schema` and the body is
+ * validated against it. The shared item schemas are `.strict()`, so a route that
+ * over-selects — `select('*')` on a `tenants` row the §4 matrix limited to the name —
+ * fails with a 500 instead of leaking the extra column while every isolation test stays
+ * green. See `SchemaEnforcement`: the fix for that 500 is the route's `select`.
  */
 export function paginated<T>(
   items: readonly T[],
   page: PageInfoInput,
   requestId: string,
-  options: { schema?: z.ZodTypeAny } = {},
+  options: SchemaEnforcement = {},
 ): Response {
-  const body = {
+  const body: Record<string, unknown> = {
     data: items,
     page_info: {
       next_cursor: page.nextCursor,
@@ -140,19 +223,8 @@ export function paginated<T>(
     });
   }
 
-  if (options.schema) {
-    const full = options.schema.safeParse(body);
-    if (!full.success) {
-      throw new ApiRouteError('INTERNAL_ERROR', {
-        logFields: { reason: 'list_response_schema_rejected', count: full.error.issues.length },
-        cause: full.error,
-      });
-    }
-    // The parsed value, not the input: undeclared keys have been stripped out of it.
-    return jsonResponse(full.data, requestId, { status: 200 });
-  }
-
-  return jsonResponse(body, requestId, { status: 200 });
+  const shipped = enforceSchema(body, options, 'list_response_schema_rejected');
+  return jsonResponse(shipped, requestId, { status: 200 });
 }
 
 /**

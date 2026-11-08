@@ -29,23 +29,30 @@ import 'server-only';
 
 import { z } from 'zod';
 
-import { assertServerRuntime, parseEnvOrThrow } from '@/lib/env';
+import { assertServerRuntime, blankAsAbsent, parseEnvOrThrow, presentValue } from '@/lib/env';
 
 const SecretsSchema = z.object({
   /**
    * Bypasses Row Level Security entirely. Only `lib/supabase/server-only/service-role.ts`
    * should ever read this.
    */
-  SUPABASE_SERVICE_ROLE_KEY: z
-    .string()
-    .min(20, 'SUPABASE_SERVICE_ROLE_KEY looks too short to be a real key'),
+  SUPABASE_SERVICE_ROLE_KEY: presentValue(
+    z.string().min(20, 'SUPABASE_SERVICE_ROLE_KEY looks too short to be a real key'),
+  ),
 });
 
 type Secrets = z.infer<typeof SecretsSchema>;
 
 const OptionalSecretsSchema = z.object({
-  /** Absent in environments that do not exercise the AI lane (for example CI unit runs). */
-  ANTHROPIC_API_KEY: z.string().min(10).optional(),
+  /**
+   * Absent in environments that do not exercise the AI lane (for example CI unit runs).
+   *
+   * `presentValue` is what makes `ANTHROPIC_API_KEY=` — set but blank, which is what
+   * `.env.local` actually ships — resolve to `undefined` rather than failing the length
+   * check. A blank key means "not configured", and the AI routes have a clean path for
+   * that; it is not a boot error.
+   */
+  ANTHROPIC_API_KEY: presentValue(z.string().min(10).optional()),
 });
 
 type OptionalSecrets = z.infer<typeof OptionalSecretsSchema>;
@@ -82,9 +89,15 @@ export function anthropicApiKey(): string | null {
   return optionalSecretsCache.ANTHROPIC_API_KEY ?? null;
 }
 
-/** Whether a service-role credential is present, without revealing or caching it. */
+/**
+ * Whether a service-role credential is present, without revealing or caching it.
+ *
+ * Goes through `blankAsAbsent` for the same reason the schemas do: `KEY=` is not a
+ * credential, and reporting it as one would make `tryCreateServiceRoleClient` hand back
+ * a client that fails on first use instead of `null`.
+ */
 export function hasServiceRoleCredential(): boolean {
   if (typeof window !== 'undefined') return false;
-  const value = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const value = blankAsAbsent(process.env.SUPABASE_SERVICE_ROLE_KEY);
   return typeof value === 'string' && value.length >= 20;
 }

@@ -63,6 +63,40 @@ export function parseEnvOrThrow<S extends z.ZodTypeAny>(schema: S, input: unknow
   throw new EnvironmentError(Array.from(new Set(names)));
 }
 
+/**
+ * Treats a present-but-blank variable as absent.
+ *
+ * `.env.local` routinely ships `ANTHROPIC_API_KEY=` — the name is set, the value is the
+ * empty string. Without this, `z.string().min(10).optional()` accepts `undefined` but
+ * *rejects* `''`, so "I have not configured the AI yet" raised a boot-shaped
+ * `EnvironmentError` instead of resolving to `null`, and every AI route answered 500
+ * rather than taking the clean "AI unavailable" path.
+ *
+ * Applied to every variable, not only the optional secrets, because the same trap has
+ * two other shapes:
+ *
+ *  - A blank **required** value (`NEXT_PUBLIC_SUPABASE_ANON_KEY=`,
+ *    `SUPABASE_SERVICE_ROLE_KEY=`) used to fail as "looks too short to be a real key",
+ *    which reads like a wrong value rather than a missing one. It now fails as missing,
+ *    which is what it is. It still fails — blank is not a usable key.
+ *  - A blank value on a variable with a `.default()` (`AI_PROVIDER=`, `AI_MODEL=`,
+ *    `APP_BASE_URL=`) used to fail the enum or URL check instead of falling back to the
+ *    default, because Zod only applies a default to `undefined`. It now takes the
+ *    default.
+ *
+ * Surrounding whitespace is trimmed, so a trailing space after `=` behaves the same way.
+ */
+export function blankAsAbsent(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  return trimmed === '' ? undefined : trimmed;
+}
+
+/** Wraps a schema so a blank or whitespace-only value is read as absent. */
+export function presentValue<S extends z.ZodTypeAny>(schema: S) {
+  return z.preprocess(blankAsAbsent, schema);
+}
+
 /* ------------------------------------------------------------------ public -- */
 
 /**
@@ -71,10 +105,10 @@ export function parseEnvOrThrow<S extends z.ZodTypeAny>(schema: S, input: unknow
  * `process.env[name]` — or the inliner cannot see them.
  */
 const PublicEnvSchema = z.object({
-  NEXT_PUBLIC_SUPABASE_URL: z.string().url('NEXT_PUBLIC_SUPABASE_URL must be a URL'),
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: z
-    .string()
-    .min(20, 'NEXT_PUBLIC_SUPABASE_ANON_KEY looks too short to be a real key'),
+  NEXT_PUBLIC_SUPABASE_URL: presentValue(z.string().url('NEXT_PUBLIC_SUPABASE_URL must be a URL')),
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: presentValue(
+    z.string().min(20, 'NEXT_PUBLIC_SUPABASE_ANON_KEY looks too short to be a real key'),
+  ),
 });
 
 export type PublicEnv = z.infer<typeof PublicEnvSchema>;
@@ -95,10 +129,12 @@ export const publicEnv: PublicEnv = parseEnvOrThrow(PublicEnvSchema, {
  * to a browser, so the accessor refuses to run in one.
  */
 const ServerEnvSchema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  APP_BASE_URL: z.string().url('APP_BASE_URL must be a URL').default('http://localhost:3000'),
-  AI_PROVIDER: z.enum(['anthropic']).default('anthropic'),
-  AI_MODEL: z.string().min(1).default('claude-sonnet-5'),
+  NODE_ENV: presentValue(z.enum(['development', 'test', 'production']).default('development')),
+  APP_BASE_URL: presentValue(
+    z.string().url('APP_BASE_URL must be a URL').default('http://localhost:3000'),
+  ),
+  AI_PROVIDER: presentValue(z.enum(['anthropic']).default('anthropic')),
+  AI_MODEL: presentValue(z.string().min(1).default('claude-sonnet-5')),
 });
 
 export type ServerEnv = z.infer<typeof ServerEnvSchema>;

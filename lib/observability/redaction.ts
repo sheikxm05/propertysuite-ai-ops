@@ -17,6 +17,11 @@
  *   `authorization`, `cookie`, `password`, `api_key`, `key`, `secret`,
  *   `extracted_data`, `storage_path`, `metadata`, `payload`, `signed_url`.
  *
+ * `unexpected_fields` is on the list and carries *key names* only — the columns a
+ * response schema refused. A name is schema, not data. The usual counter-example is an
+ * object keyed by email address, and `scrubText` runs over every retained string, so such
+ * a key would be masked on the way out anyway.
+ *
  * `scrubText` is the second line of defence, for the free-text log *message* itself,
  * which no allowlist can police.
  */
@@ -71,6 +76,7 @@ export const LOGGABLE_FIELDS: ReadonlySet<string> = new Set([
   'runtime',
   'status',
   'status_code',
+  'unexpected_fields',
   'tenancy_id',
   'tenant_id',
   'ticket_id',

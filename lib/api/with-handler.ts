@@ -40,7 +40,12 @@ import type { z } from 'zod';
 import { ApiRouteError, toApiRouteError, type ErrorCode } from '@/lib/api/errors';
 import { errorResponseFrom, jsonResponse, withCookies } from '@/lib/api/responses';
 import { AuthorizationDeniedError } from '@/lib/auth/authorize';
-import { membershipLogFields, requireMembership, type Membership } from '@/lib/auth/roles';
+import {
+  membershipLogFields,
+  requireMembership,
+  resolveMembership,
+  type Membership,
+} from '@/lib/auth/roles';
 import { requireSessionFromClient, type AuthenticatedSession } from '@/lib/auth/session';
 import { writeAuditLog } from '@/lib/audit/write';
 import { REQUEST_ID_HEADER, resolveRequestId, routeLabel } from '@/lib/observability/correlation';
@@ -64,6 +69,30 @@ const MAX_JSON_BODY_BYTES = 1_000_000;
 /** A Zod schema, accepting an unknown input and producing `T`. */
 export type RequestSchema<T> = z.ZodType<T, z.ZodTypeDef, unknown>;
 
+/**
+ * Whether the route needs an organization membership.
+ *
+ * `'required'` is the default and every existing route keeps it: authenticate, resolve
+ * membership from trusted rows, and answer `FORBIDDEN` when there is none.
+ *
+ * `'optional'` exists for onboarding, and for nothing else. A user who has just signed up
+ * and is calling `create_organization`, or an invitee calling `accept_invitation`, is
+ * authenticated and has **no membership yet** — that is the correct state, not a denial.
+ * Before this existed those two flows had to be exposed as server actions as well, so one
+ * flow had two transports.
+ *
+ * It is opt-in per route and never inferred. A route that forgets to declare it gets
+ * `'required'` and fails closed, which is the only safe default: inferring "optional"
+ * from the absence of a `roles` list would silently open every unlisted route to a
+ * caller with no membership.
+ */
+export type MembershipMode = 'required' | 'optional';
+
+/** `Membership` under `'required'`, `Membership | null` under `'optional'`. */
+export type MembershipFor<M extends MembershipMode> = M extends 'optional'
+  ? Membership | null
+  : Membership;
+
 /** Extra audit detail a handler supplies once it knows what it changed. */
 export interface AuditDetails {
   entityId?: string | null;
@@ -79,11 +108,20 @@ export interface AuditDetails {
  * without `params` they cannot be written at all. Raised as a planning defect; the field
  * is additive, so a lane coded against §5.2 as published still compiles.
  */
-export interface ApiHandlerContext<TBody = undefined, TQuery = undefined> {
+export interface ApiHandlerContext<
+  TBody = undefined,
+  TQuery = undefined,
+  M extends MembershipMode = 'required',
+> {
   /** The verified caller. From `auth.getUser()`, not a decoded cookie. */
   session: AuthenticatedSession;
-  /** Derived from trusted rows by `resolveMembership`. Never from request data. */
-  membership: Membership;
+  /**
+   * Derived from trusted rows by `resolveMembership`. Never from request data.
+   *
+   * `null` only when the route declared `membership: 'optional'`, in which case the type
+   * forces the handler to deal with the absence.
+   */
+  membership: MembershipFor<M>;
   /** `bodySchema` output, or `undefined` when no schema was declared. */
   body: TBody;
   /** `querySchema` output, or `undefined` when no schema was declared. */
@@ -103,8 +141,24 @@ export interface ApiHandlerContext<TBody = undefined, TQuery = undefined> {
   audit(details: AuditDetails): void;
 }
 
-export interface WithApiHandlerOptions<TBody = undefined, TQuery = undefined> {
-  /** Coarse role gate. Omit to allow any active member; the matrix check is separate. */
+export interface WithApiHandlerOptions<
+  TBody = undefined,
+  TQuery = undefined,
+  M extends MembershipMode = 'required',
+> {
+  /**
+   * Whether an organization membership is required. Defaults to `'required'`.
+   * See `MembershipMode` — declaring `'optional'` is the only way to reach a null
+   * `ctx.membership`.
+   */
+  membership?: M;
+  /**
+   * Coarse role gate. Omit to allow any active member; the matrix check is separate.
+   *
+   * Meaningless together with `membership: 'optional'`, and treated as a contradiction
+   * rather than ignored: a caller with no membership has no role to check, so the request
+   * is refused. Declare one or the other.
+   */
   roles?: readonly MemberRole[];
   bodySchema?: RequestSchema<TBody>;
   querySchema?: RequestSchema<TQuery>;
@@ -114,8 +168,8 @@ export interface WithApiHandlerOptions<TBody = undefined, TQuery = undefined> {
   audit?: { action: string; entityType: string };
 }
 
-export type ApiHandler<TBody, TQuery> = (
-  ctx: ApiHandlerContext<TBody, TQuery>,
+export type ApiHandler<TBody, TQuery, M extends MembershipMode = 'required'> = (
+  ctx: ApiHandlerContext<TBody, TQuery, M>,
 ) => Response | Promise<Response>;
 
 /** What Next.js calls. The second argument is absent on a static route. */
@@ -137,17 +191,25 @@ export interface ApiHandlerInternals {
 /* ------------------------------------------------------------- entry point -- */
 
 /** The frozen §5.2 wrapper. Every route in §5.5 uses this or its privileged variant. */
-export function withApiHandler<TBody = undefined, TQuery = undefined>(
-  options: WithApiHandlerOptions<TBody, TQuery>,
-  handler: ApiHandler<TBody, TQuery>,
+export function withApiHandler<
+  TBody = undefined,
+  TQuery = undefined,
+  M extends MembershipMode = 'required',
+>(
+  options: WithApiHandlerOptions<TBody, TQuery, M>,
+  handler: ApiHandler<TBody, TQuery, M>,
 ): RouteHandler {
   return createApiHandler(options, handler, {});
 }
 
 /** `withApiHandler` with the internal seam exposed. Used by the privileged variant. */
-export function createApiHandler<TBody = undefined, TQuery = undefined>(
-  options: WithApiHandlerOptions<TBody, TQuery>,
-  handler: ApiHandler<TBody, TQuery>,
+export function createApiHandler<
+  TBody = undefined,
+  TQuery = undefined,
+  M extends MembershipMode = 'required',
+>(
+  options: WithApiHandlerOptions<TBody, TQuery, M>,
+  handler: ApiHandler<TBody, TQuery, M>,
   internals: ApiHandlerInternals = {},
 ): RouteHandler {
   return async function route(request, routeContext) {
@@ -170,10 +232,24 @@ export function createApiHandler<TBody = undefined, TQuery = undefined>(
       const session = await requireSessionFromClient(supabase);
 
       /* 2. authorize (coarse) -------------------------------------------- */
-      membership = await requireMembership(session.userId, supabase);
-      assertRoleAllowed(options.roles, membership);
+      membership =
+        options.membership === 'optional'
+          ? await resolveMembership(session.userId, supabase)
+          : await requireMembership(session.userId, supabase);
 
-      const scopedLogger = logger.child(membershipLogFields(membership));
+      if (membership) {
+        assertRoleAllowed(options.roles, membership);
+      } else if (options.roles && options.roles.length > 0) {
+        // A contradiction in the route's own declaration: there is no role to check.
+        // Refused rather than ignored, so the mistake surfaces as a 403 in a test.
+        throw new ApiRouteError('FORBIDDEN', {
+          logFields: { reason: 'roles_declared_without_membership' },
+        });
+      }
+
+      const scopedLogger = membership
+        ? logger.child(membershipLogFields(membership))
+        : logger.child({ profile_id: session.userId, reason: 'onboarding_no_membership' });
 
       /* 3. validate ------------------------------------------------------ */
       const query = parseQuery(options.querySchema, request);
@@ -185,14 +261,16 @@ export function createApiHandler<TBody = undefined, TQuery = undefined>(
         pathname,
         route,
         request.method,
-        membership,
+        // Still per-user with no membership: the subject is the verified session user,
+        // never an IP and never a client-supplied header.
+        membership?.profile.id ?? session.userId,
         scopedLogger,
       );
 
       /* 5. execute ------------------------------------------------------- */
-      const context: ApiHandlerContext<TBody, TQuery> = {
+      const context: ApiHandlerContext<TBody, TQuery, M> = {
         session,
-        membership,
+        membership: membership as MembershipFor<M>,
         body,
         query,
         supabase,
@@ -214,7 +292,17 @@ export function createApiHandler<TBody = undefined, TQuery = undefined>(
       const response = await handler(context);
 
       /* 6. audit --------------------------------------------------------- */
-      if (options.audit && response.status < 400) {
+      if (options.audit && response.status < 400 && !membership) {
+        // `log_audit` requires an organization and an onboarding caller has none yet.
+        // `0003`'s `create_organization` and `accept_invitation` both call `log_audit`
+        // themselves, in the same transaction as the write, which is strictly better than
+        // auditing from out here. Recorded, so the gap is never silent.
+        scopedLogger.info('audit delegated to the rpc', {
+          action: options.audit.action,
+          entity_type: options.audit.entityType,
+          reason: 'onboarding_audit_written_by_rpc',
+        });
+      } else if (options.audit && response.status < 400 && membership) {
         await writeAuditLog(
           supabase,
           {
@@ -377,7 +465,7 @@ function enforceRateLimit(
   pathname: string,
   route: string,
   method: string,
-  membership: Membership,
+  subjectId: string,
   logger: Logger,
 ): void {
   const rule: RateLimitRule = applyAiCeiling(
@@ -385,8 +473,7 @@ function enforceRateLimit(
     pathname,
   );
 
-  const subject =
-    declared || isAiPath(pathname) ? membership.profile.id : `${membership.profile.id}|${route}`;
+  const subject = declared || isAiPath(pathname) ? subjectId : `${subjectId}|${route}`;
 
   const decision = consume(rule, subject);
   if (decision.allowed) return;

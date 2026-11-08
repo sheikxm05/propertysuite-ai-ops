@@ -76,6 +76,9 @@ export const POST = withApiHandler(
 | §5.4 A15  | `@shared/index` is the canonical import specifier.                               |
 | §5 A5     | Auth slugs are `/sign-in`, `/sign-up`, `/forgot-password`, `/accept-invitation`. |
 | §5.7 A18  | `paginated()` emits `{ data, page_info }` — the shared `listResponseSchema`. |
+| §4 A7     | A `service_provider` reads and appends assigned-ticket document evidence.    |
+| §5 A17    | `/accept-invitation` stays reachable to a signed-in visitor.                 |
+| A19       | `POST /members` returns the one-time invitation token.                       |
 
 ## Decisions worth knowing before you edit
 
@@ -119,13 +122,20 @@ Do not reintroduce a second copy of any of those four tables.
 
 **There is one list envelope, and `packages/shared` owns its shape.** `paginated()`
 emits `{ data, page_info: { next_cursor, has_more, limit } }`, which is
-`listResponseSchema()` (§5.7 amendment A18). Pass the route's own `*ListResponseSchema`
-as `options.schema` and the **parsed** body is what ships — an item schema is a plain
-`z.object()`, so it *strips* undeclared keys. That turns the contract into an output
-allowlist: a route that over-selects has the extra column removed before it leaves the
-process. `has_more` is carried separately from `next_cursor` deliberately, because a
-client given only a cursor cannot tell "no next page" from "the server failed to send
-one", and on an RLS-filtered list a short page is normal.
+`listResponseSchema()` (§5.7 amendment A18). `has_more` is carried separately from
+`next_cursor` deliberately, because a client given only a cursor cannot tell "no next
+page" from "the server failed to send one", and on an RLS-filtered list a short page is
+normal.
+
+**Response contracts are enforced fail-closed.** Pass the route's own `*ResponseSchema`
+as `options.schema` to `ok`, `created`, `accepted` or `paginated`. Every item schema in
+`packages/shared/schemas/**` is `.strict()`, so a column the contract does not declare is
+**rejected** — the response becomes a 500 and nothing undeclared reaches the client.
+There is no strip-and-warn path, and there should not be: the condition is a route
+over-selecting, which is a programming error that CI catches in front of a developer, and
+rejecting also surfaces genuine contract drift that a silent strip would hide. **If it
+throws, fix the route's `select`, not the schema.** Relaxing an item schema to make a
+response pass would create two truths about one contract and reopen the leak it closed.
 
 **Redaction is an allowlist, not a denylist.** Adding a field to a log call does nothing
 until its name is added to `LOGGABLE_FIELDS`. That is the intended friction: the failure
@@ -140,6 +150,20 @@ at `MAX_PAGE_SIZE`, runs on the caller's client so RLS answers the role question
 `organization_id` to the trusted membership, and re-checks every row through
 `authorize()`. A tenant asking about another member gets no entry and the caller falls
 back to its id label: the correct answer, not an error.
+
+**`withApiHandler` has a `membership` mode, and it defaults to required.**
+`membership: 'optional'` exists for onboarding only — `create_organization` and
+`accept_invitation` are called by an authenticated user who has no membership yet, which
+is a correct state rather than a denial. It is opt-in per route and never inferred, so a
+route that forgets it fails closed; `ctx.membership` is then typed `Membership | null` and
+the handler cannot ignore the absence. Declaring `roles` alongside it is treated as a
+contradiction and refused, because a caller with no membership has no role to check.
+
+**A blank environment variable reads as absent.** `presentValue` wraps every entry in
+`lib/env.ts` and `lib/server-only/secrets.ts`, so `ANTHROPIC_API_KEY=` resolves to `null`
+instead of failing a length check, a blank required key fails as *missing* rather than as
+"too short", and a blank value on a variable with a `.default()` takes the default. Zod
+only defaults `undefined`, which is the whole reason this is needed.
 
 **`getSession` calls `getUser`.** The Supabase `getSession()` decodes a cookie and trusts
 it. On the server only the verified call is acceptable.
