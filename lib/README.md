@@ -52,7 +52,7 @@ export const POST = withApiHandler(
 | `supabase/middleware.ts`                | Edge client that refreshes the session cookie                   |
 | `supabase/server-only/service-role.ts`  | **Bypasses RLS.** Server-only, by lint and by assertion         |
 | `auth/session.ts`                       | `getSession`, `requireSession` — verified, not decoded          |
-| `auth/roles.ts`                         | `resolveMembership` — trusted rows only                         |
+| `auth/roles.ts`                         | `resolveMembership`, `resolveMemberDisplayNames`                |
 | `auth/authorize.ts`                     | The §4 matrix in application space, plus column projection      |
 | `api/errors.ts`                         | The frozen eight, status mapping, SQLSTATE mapping              |
 | `api/responses.ts`                      | The frozen envelope. The only response builder                  |
@@ -75,6 +75,7 @@ export const POST = withApiHandler(
 | §5.2 A14  | `withPrivilegedApiHandler` is the only route to `ctx.serviceRole`.               |
 | §5.4 A15  | `@shared/index` is the canonical import specifier.                               |
 | §5 A5     | Auth slugs are `/sign-in`, `/sign-up`, `/forgot-password`, `/accept-invitation`. |
+| §5.7 A18  | `paginated()` emits `{ data, page_info }` — the shared `listResponseSchema`. |
 
 ## Decisions worth knowing before you edit
 
@@ -116,9 +117,29 @@ code union, the status table, the message table and the SQLSTATE table all live 
 adds the throwables, the normalisation and the rule that a 500 never describes itself.
 Do not reintroduce a second copy of any of those four tables.
 
+**There is one list envelope, and `packages/shared` owns its shape.** `paginated()`
+emits `{ data, page_info: { next_cursor, has_more, limit } }`, which is
+`listResponseSchema()` (§5.7 amendment A18). Pass the route's own `*ListResponseSchema`
+as `options.schema` and the **parsed** body is what ships — an item schema is a plain
+`z.object()`, so it *strips* undeclared keys. That turns the contract into an output
+allowlist: a route that over-selects has the extra column removed before it leaves the
+process. `has_more` is carried separately from `next_cursor` deliberately, because a
+client given only a cursor cannot tell "no next page" from "the server failed to send
+one", and on an RLS-filtered list a short page is normal.
+
 **Redaction is an allowlist, not a denylist.** Adding a field to a log call does nothing
 until its name is added to `LOGGABLE_FIELDS`. That is the intended friction: the failure
 mode of forgetting is a missing diagnostic, not a leaked phone number.
+
+**`resolveMemberDisplayNames` is the only lane-legal source of member names.**
+`eslint.config.mjs` restricts the `profiles` table by name to `auth/roles.ts`, and a
+feature lane cannot write in `lib/**`, so an owner picker for
+`properties.owner_member_id` had nowhere to read from. It returns `{ fullName, role }`
+and nothing else — no `email`, no `phone` — batches a bounded id list in one query capped
+at `MAX_PAGE_SIZE`, runs on the caller's client so RLS answers the role question, pins
+`organization_id` to the trusted membership, and re-checks every row through
+`authorize()`. A tenant asking about another member gets no entry and the caller falls
+back to its id label: the correct answer, not an error.
 
 **`getSession` calls `getUser`.** The Supabase `getSession()` decodes a cookie and trusts
 it. On the server only the verified call is acceptable.

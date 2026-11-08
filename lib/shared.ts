@@ -33,6 +33,11 @@ export {
 } from '@shared/index';
 export type { ApiError, ApiErrorDetail, ErrorCode } from '@shared/index';
 
+/* The list response envelope (§5.7, amendment A18) ----------------------------- */
+
+export { MAX_PAGE_SIZE, PageInfoSchema, listResponseSchema } from '@shared/index';
+export type { PageInfo } from '@shared/index';
+
 /* Generated database row types ------------------------------------------------ */
 
 export type { Database, Json } from '@shared/index';

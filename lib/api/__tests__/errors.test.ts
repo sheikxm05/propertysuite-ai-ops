@@ -29,6 +29,8 @@ import {
   unprocessable,
   validationError,
 } from '../errors';
+import { listResponseSchema } from '@/lib/shared';
+
 import { errorResponse, errorResponseFrom, ok, paginated } from '../responses';
 
 const CODES = [
@@ -114,11 +116,117 @@ describe('success envelopes', () => {
     expect(await response.json()).toEqual({ data: { id: 'p1' } });
   });
 
-  it('wraps a page in { data, next_cursor } with an explicit null on the last page', async () => {
-    expect(await paginated([{ id: 'a' }], null, 'r').json()).toEqual({
+  it('wraps a page in the shared { data, page_info } envelope (A18)', async () => {
+    const response = paginated([{ id: 'a' }], { nextCursor: 'c1', hasMore: true, limit: 25 }, 'r');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
       data: [{ id: 'a' }],
-      next_cursor: null,
+      page_info: { next_cursor: 'c1', has_more: true, limit: 25 },
     });
+  });
+
+  it('sends next_cursor as an explicit null on the last page, never absent', async () => {
+    const body = (await paginated(
+      [{ id: 'a' }],
+      { nextCursor: null, hasMore: false, limit: 25 },
+      'r',
+    ).json()) as { page_info: Record<string, unknown> };
+    expect(Object.keys(body.page_info).sort()).toEqual(['has_more', 'limit', 'next_cursor']);
+    expect(body.page_info.next_cursor).toBeNull();
+  });
+
+  it('matches the shared listResponseSchema exactly', async () => {
+    const schema = listResponseSchema(z.object({ id: z.string() }));
+    const body = await paginated(
+      [{ id: 'a' }],
+      { nextCursor: null, hasMore: false, limit: 25 },
+      'r',
+    ).json();
+    // `listResponseSchema` is `.strict()`, so this also proves there are no extra keys.
+    expect(schema.safeParse(body).success).toBe(true);
+  });
+
+  it('carries the same no-store and correlation discipline as every other body', () => {
+    const response = paginated([], { nextCursor: null, hasMore: false, limit: 25 }, 'req-9');
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(response.headers.get('x-request-id')).toBe('req-9');
+  });
+
+  it('carries page_info on an empty page rather than omitting it', async () => {
+    expect(
+      await paginated([], { nextCursor: null, hasMore: false, limit: 50 }, 'r').json(),
+    ).toEqual({ data: [], page_info: { next_cursor: null, has_more: false, limit: 50 } });
+  });
+
+  it('does not derive has_more from next_cursor — a short page may still have more', async () => {
+    // The distinction A18 exists to preserve: an RLS-filtered page can come back short
+    // while further rows remain, so `has_more` must be whatever the query said.
+    const body = (await paginated(
+      [{ id: 'a' }],
+      { nextCursor: null, hasMore: true, limit: 25 },
+      'r',
+    ).json()) as { page_info: { has_more: boolean; next_cursor: string | null } };
+    expect(body.page_info.has_more).toBe(true);
+    expect(body.page_info.next_cursor).toBeNull();
+  });
+});
+
+describe('paginated() validation guards', () => {
+  it('raises INTERNAL_ERROR when page_info is malformed', () => {
+    const bad = { nextCursor: 'c1', hasMore: undefined, limit: 25 } as unknown as Parameters<
+      typeof paginated
+    >[1];
+    expect(() => paginated([], bad, 'r')).toThrow(ApiRouteError);
+    try {
+      paginated([], bad, 'r');
+      expect.unreachable('should have thrown');
+    } catch (error) {
+      const thrown = error as ApiRouteError;
+      expect(thrown.status).toBe(500);
+      expect(thrown.logFields.reason).toBe('page_info_malformed');
+    }
+  });
+
+  it('STRIPS a column the contract omits instead of shipping it', async () => {
+    // The real behaviour, and the reason the parsed body is what ships: an item schema
+    // is a plain `z.object()`, which strips undeclared keys rather than rejecting them.
+    // A route that over-selected `email` on a `tenants` projection the §4 matrix limited
+    // to the name therefore cannot leak it.
+    const schema = listResponseSchema(z.object({ id: z.string(), full_name: z.string() }));
+    const response = paginated(
+      [{ id: 't1', full_name: 'A Person', email: 'a.person@example.com', phone: '+971501234567' }],
+      { nextCursor: null, hasMore: false, limit: 25 },
+      'r',
+      { schema },
+    );
+
+    const text = await response.text();
+    expect(text).not.toContain('a.person@example.com');
+    expect(text).not.toContain('971501234567');
+    expect(JSON.parse(text)).toEqual({
+      data: [{ id: 't1', full_name: 'A Person' }],
+      page_info: { next_cursor: null, has_more: false, limit: 25 },
+    });
+  });
+
+  it('raises INTERNAL_ERROR when the envelope itself is wrong', () => {
+    // The envelope *is* `.strict()`, so a malformed page_info is rejected outright.
+    const schema = listResponseSchema(z.object({ id: z.string() }));
+    try {
+      paginated([{ id: 'a' }], { nextCursor: null, hasMore: false, limit: 1.5 }, 'r', { schema });
+      expect.unreachable('should have thrown');
+    } catch (error) {
+      const thrown = error as ApiRouteError;
+      expect(thrown.status).toBe(500);
+      expect(thrown.logFields.reason).toBe('page_info_malformed');
+    }
+  });
+
+  it('passes a body that satisfies the route schema', () => {
+    const schema = listResponseSchema(z.object({ id: z.string() }));
+    expect(() =>
+      paginated([{ id: 'a' }], { nextCursor: null, hasMore: false, limit: 25 }, 'r', { schema }),
+    ).not.toThrow();
   });
 });
 

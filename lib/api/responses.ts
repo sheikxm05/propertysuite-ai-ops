@@ -10,22 +10,38 @@
  * schema, and §5.2 does not permit one; the detail goes to the server log instead,
  * joined to the response by `request_id`.
  *
- * Success bodies are `{ data }`, and lists are `{ data, next_cursor }` to match the
- * frozen cursor pagination in §5.7. `docs/api-contracts.md` does not freeze a success
- * envelope, so this file is its single definition — a feature lane that hand-rolls
- * `Response.json` diverges from it silently, which is why nothing else may construct
- * one.
+ * Success bodies are `{ data }`. Lists are
+ *
+ *     { "data": [ … ], "page_info": { "next_cursor": …, "has_more": …, "limit": … } }
+ *
+ * which is `listResponseSchema()` from `packages/shared/schemas/primitives.ts`, by
+ * §5.7 amendment A18. This file previously emitted a flat `{ data, next_cursor }`, which
+ * it had invented because nothing froze a list envelope; `packages/shared` is the
+ * contract source and every `*ListResponseSchema` is already built on
+ * `listResponseSchema`, so the shared shape wins and this helper now produces it.
+ *
+ * `has_more` is not derivable from `next_cursor`, which is why it is carried
+ * separately: a client given only a cursor cannot tell "there is no next page" from
+ * "the server failed to send one". On an RLS-filtered list a short page is normal and
+ * says nothing about whether further rows exist, so that distinction is load-bearing
+ * rather than cosmetic.
+ *
+ * `docs/api-contracts.md` still does not spell the success envelope out, so this file
+ * remains its single construction point — a feature lane that hand-rolls
+ * `Response.json` diverges silently, which is why nothing else may build one.
  */
 
+import type { z } from 'zod';
+
 import { REQUEST_ID_HEADER } from '@/lib/observability/correlation';
-import type { ApiError } from '@/lib/shared';
+import { PageInfoSchema, type ApiError } from '@/lib/shared';
 
 import {
+  ApiRouteError,
   ERROR_MESSAGES,
   ERROR_STATUS,
   GENERIC_ERROR_MESSAGE,
   GENERIC_ERROR_STATUS,
-  type ApiRouteError,
   type ErrorCode,
 } from './errors';
 
@@ -62,15 +78,81 @@ export function accepted<T>(data: T, requestId: string): Response {
 }
 
 /**
- * 200 with a cursor page. `next_cursor` is `null` on the last page rather than absent,
- * so a client can branch on one shape.
+ * The page state a list route hands to `paginated`.
+ *
+ * `camelCase` because it is a call-site argument, not the wire body: the three fields
+ * are exactly what a keyset page builder already produces, so
+ * `features/properties/cursor.ts`'s `Page<T>` and the equivalent in
+ * `features/maintenance/domain/service.ts` satisfy it structurally and can be passed
+ * straight through. The wire contract is `PageInfoSchema` in `packages/shared`, which
+ * this is mapped onto — and validated against — below. It is an adapter, not a second
+ * copy of the envelope.
+ */
+export interface PageInfoInput {
+  /** Opaque. `null` on the last page, never absent. */
+  nextCursor: string | null;
+  /**
+   * Whether further rows exist. Must come from the query — the standard technique is to
+   * ask the database for `limit + 1` rows and check whether the extra one came back.
+   * Deriving it from `nextCursor` defeats the point of carrying it.
+   */
+  hasMore: boolean;
+  /** The page size the caller asked for, not the number of rows returned. */
+  limit: number;
+}
+
+/**
+ * 200 with a cursor page, in the `listResponseSchema()` shape (§5.7 amendment A18).
+ *
+ * Pass the route's own `*ListResponseSchema` as `options.schema` and the **parsed** body
+ * is what ships. That makes the schema an output allowlist, not just a check:
+ * `listResponseSchema` is `.strict()` at the envelope, and its item schema is a plain
+ * `z.object()`, which *strips* keys it does not declare rather than rejecting them. So a
+ * route that over-selects — `select('*')` on a `tenants` row the §4 matrix limited to the
+ * name — has the extra column removed before it leaves the process instead of leaking it
+ * while every isolation test stays green.
+ *
+ * An envelope-level failure is a defect in our code, not in the request, so it raises
+ * `INTERNAL_ERROR`. The offending body is never logged or returned.
  */
 export function paginated<T>(
   items: readonly T[],
-  nextCursor: string | null,
+  page: PageInfoInput,
   requestId: string,
+  options: { schema?: z.ZodTypeAny } = {},
 ): Response {
-  return jsonResponse({ data: items, next_cursor: nextCursor }, requestId, { status: 200 });
+  const body = {
+    data: items,
+    page_info: {
+      next_cursor: page.nextCursor,
+      has_more: page.hasMore,
+      limit: page.limit,
+    },
+  };
+
+  // Always checked, and cheap: four fields against a strict schema. Catches a route
+  // that passed `undefined` for `hasMore` or a number for `next_cursor`.
+  const pageInfo = PageInfoSchema.safeParse(body.page_info);
+  if (!pageInfo.success) {
+    throw new ApiRouteError('INTERNAL_ERROR', {
+      logFields: { reason: 'page_info_malformed', count: pageInfo.error.issues.length },
+      cause: pageInfo.error,
+    });
+  }
+
+  if (options.schema) {
+    const full = options.schema.safeParse(body);
+    if (!full.success) {
+      throw new ApiRouteError('INTERNAL_ERROR', {
+        logFields: { reason: 'list_response_schema_rejected', count: full.error.issues.length },
+        cause: full.error,
+      });
+    }
+    // The parsed value, not the input: undeclared keys have been stripped out of it.
+    return jsonResponse(full.data, requestId, { status: 200 });
+  }
+
+  return jsonResponse(body, requestId, { status: 200 });
 }
 
 /**
