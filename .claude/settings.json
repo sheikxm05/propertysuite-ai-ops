@@ -1,0 +1,19 @@
+{
+  "$comment": "Project settings for PropertySuite. The deny rule enforces CLAUDE.md rule 1 mechanically: no Artifact may ever be created for this project. The PreToolUse hook blocks out-of-lane writes before they happen, and is active only when CLAUDE_LANE is set in the agent's environment.",
+  "permissions": {
+    "deny": ["Artifact"]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/lane-guard.mjs"
+          }
+        ]
+      }
+    ]
+  }
+}
