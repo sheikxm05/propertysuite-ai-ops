@@ -376,6 +376,31 @@ TASKS:
   7. Tests: full invitation lifecycle; a non-admin cannot invite; an accepted member
      receives exactly their role's visibility and nothing more.
 
+WAVE 0 CONTRACTS YOU MUST HONOUR (discovered during Wave 0, now frozen):
+  - Profiles are created by an `auth.users` AFTER INSERT trigger in migration 0003,
+    not by you. Do not attempt a client INSERT into `profiles` — there is no policy
+    for it, deliberately. You MAY update the caller's own row (self-scoped UPDATE).
+  - Invitations live in `public.organization_invitations` (created in 0003), not in
+    `organization_members` — `profile_id` there is NOT NULL, so an invitee who has
+    not signed up cannot be represented as a member row.
+  - NEVER write `select *` against `organization_invitations`. The client grant is
+    COLUMN-LEVEL and deliberately omits `token_hash`, so `select *` fails with a
+    permission error. Select only the readable columns named in the CONSUMER NOTE
+    comment above the grant in 0003.
+  - Writes go through four security-definer RPCs only: `create_organization`,
+    `invite_member`, `accept_invitation`, `revoke_invitation`. There is no INSERT,
+    UPDATE or DELETE policy on either table.
+  - `organizations` is read-only for every role including organization_admin. There is
+    no rename path in this build; do not build UI for one.
+  - The plaintext invitation token is returned ONCE by `invite_member`. It is stored
+    only as a sha256 hash and can never be read back. Surface it to the admin at that
+    moment or it is gone.
+  - `audit_logs` is not client-writable. Audit rows go through `log_audit()`.
+  - You own `app/page.tsx`, `app/(dashboard)/layout.tsx` and
+    `app/(dashboard)/dashboard/**`. The first two currently contain clearly marked
+    `SEAM FOR LANE w1-l1` blocks left by w0-l1 — replace those bodies with a real
+    session check and redirect.
+
 EXIT GATE: invitation lifecycle tested; non-admin invite denied; accepted member sees
 exactly their role's data.
 ```
