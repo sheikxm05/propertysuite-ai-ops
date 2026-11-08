@@ -15,12 +15,12 @@
  * cosmetic defect, not a vulnerability.
  */
 
-import { resolveMembership, type Membership } from '@/lib/auth/roles';
+import { resolveMemberDisplayNames, resolveMembership, type Membership } from '@/lib/auth/roles';
 import { getSession } from '@/lib/auth/session';
 import { createServerClient } from '@/lib/supabase/server';
 import type { AppSupabaseClient } from '@/lib/supabase/types';
 import { throwIfPostgresError } from '@/lib/api/errors';
-import { STAFF_ROLES, isStaffRole } from '@shared/index';
+import { MAX_PAGE_SIZE, STAFF_ROLES, isStaffRole } from '@shared/index';
 
 import { OWNER_ASSOCIABLE_ROLES } from './authorization';
 import type { OwnerOption } from './property-form';
@@ -64,11 +64,16 @@ export const PROPERTY_WRITE_ROLES = STAFF_ROLES;
  * `assertOwnerAssociable` enforces on the write path — this list is the UI half, so the
  * picker cannot offer an option the server will refuse.
  *
- * `organization_members` carries `profile_id` but not a name, and `profiles` is reachable
- * only through `lib/auth/roles.ts` (`eslint.config.mjs` restricts the table by name, and
- * the briefing makes `lib/**` read-only to this lane), so there is no lane-legal source of
- * display names for this picker. The options are therefore labelled by role and a short
- * membership id. Reported as a planning defect with this lane.
+ * Display names come from `resolveMemberDisplayNames` in `lib/auth/roles.ts`, which
+ * w0-l5 added in response to this lane's planning defect: `eslint.config.mjs` restricts
+ * the `profiles` table by name to that module, so it is the one place the read is
+ * permitted. It degrades rather than throws — a caller the matrix says may not see a name
+ * simply gets no entry — so `fullName` is optional here and the picker falls back to a
+ * role-and-id label.
+ *
+ * `.limit(MAX_PAGE_SIZE)` is the frozen §5.7 maximum rather than a number invented here,
+ * and it is also the batch cap `resolveMemberDisplayNames` enforces, so the two cannot
+ * disagree about how large one page of names may be.
  */
 export async function listOwnerOptions(
   client: AppSupabaseClient,
@@ -81,10 +86,39 @@ export async function listOwnerOptions(
     .eq('status', 'active')
     .in('role', [...OWNER_ASSOCIABLE_ROLES])
     .order('created_at', { ascending: true })
-    .limit(100);
+    .limit(MAX_PAGE_SIZE);
   throwIfPostgresError(error);
 
-  return (data ?? []).map((row) => ({ memberId: row.id, role: row.role }));
+  const members = data ?? [];
+  const names = await resolveMemberDisplayNames(
+    client,
+    membership,
+    members.map((row) => row.id),
+  );
+
+  return members.map((row) => {
+    const name = names.get(row.id);
+    return name
+      ? { memberId: row.id, role: row.role, fullName: name.fullName }
+      : { memberId: row.id, role: row.role };
+  });
+}
+
+/**
+ * The display name for a single membership, or `null`.
+ *
+ * Used by the property detail page for `owner_member_id`. `null` means "not resolvable by
+ * this caller", which for a tenant or a provider is the matrix answering correctly rather
+ * than a failure — so the caller renders an id-based label instead of an error.
+ */
+export async function resolveOwnerName(
+  client: AppSupabaseClient,
+  membership: Membership,
+  ownerMemberId: string | null,
+): Promise<string | null> {
+  if (!ownerMemberId) return null;
+  const names = await resolveMemberDisplayNames(client, membership, [ownerMemberId]);
+  return names.get(ownerMemberId)?.fullName ?? null;
 }
 
 /**

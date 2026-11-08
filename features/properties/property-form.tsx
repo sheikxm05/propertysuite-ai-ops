@@ -60,14 +60,19 @@ import { PROPERTY_TYPE_LABELS } from './labels';
 /**
  * One membership that may be recorded as `properties.owner_member_id`.
  *
- * `label` is built by the server page from the member's **role and membership id**, not
- * from their name. `profiles` is reachable only through `lib/auth/roles.ts`
- * (`resolveMembership`) — `eslint.config.mjs` restricts it by name, and the owner picker
- * has no lane-legal source of display names. Reported as a planning defect with this lane.
+ * `fullName` is resolved server-side by `resolveMemberDisplayNames` in
+ * `lib/auth/roles.ts` — the one module `eslint.config.mjs` permits to read `profiles`,
+ * added by w0-l5 in response to this lane's planning defect.
+ *
+ * It is **optional** because that helper degrades rather than throws: a caller the §4
+ * matrix says may not read a given profile gets no entry back, which is the correct answer
+ * and not an error. When the name is absent the option falls back to a role-and-id label,
+ * so the picker still works.
  */
 export interface OwnerOption {
   memberId: string;
   role: string;
+  fullName?: string;
 }
 
 export interface PropertyFormProps {
@@ -247,8 +252,8 @@ export function PropertyForm({ mode, property, owners }: PropertyFormProps) {
   );
 }
 
-/** Role plus a short membership id. See `OwnerOption` for why there is no name here. */
+/** Name and role, falling back to a short membership id when the name is withheld. */
 function ownerLabel(owner: OwnerOption): string {
   const role = isMemberRole(owner.role) ? MEMBER_ROLE_LABELS[owner.role] : owner.role;
-  return `${role} · ${owner.memberId.slice(0, 8)}`;
+  return `${owner.fullName ?? `Member ${owner.memberId.slice(0, 8)}`} · ${role}`;
 }

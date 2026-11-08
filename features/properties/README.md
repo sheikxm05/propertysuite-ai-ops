@@ -107,6 +107,14 @@ organization, active membership, and a role in `OWNER_ASSOCIABLE_ROLES`. A `tena
 composite foreign key `(organization_id, owner_member_id)` is the database half; a
 violation surfaces as `UNPROCESSABLE` 422, not 500.
 
+Owner **names** come from `resolveMemberDisplayNames` in `lib/auth/roles.ts`, added by
+w0-l5 in response to this lane's planning defect — `eslint.config.mjs` restricts the
+`profiles` table by name to that module. It degrades rather than throws, returning no entry
+for a profile the §4 matrix says the caller may not read, so the picker and the detail page
+fall back to a `Member a1b2c3d4` label. `tests/properties/owner-options.test.ts` asserts
+both the resolved and the withheld path, including that a tenant gets no name for a
+neighbour even when the database hands the row back.
+
 ## Pagination
 
 Cursor only. The sort key is always `(created_at, id)` — properties newest-first, units in
