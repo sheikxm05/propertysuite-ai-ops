@@ -40,6 +40,7 @@ const SERVER_ONLY_VARS = [
   'WHATSAPP_VERIFY_TOKEN',
   'RESEND_API_KEY',
   'GOOGLE_CLIENT_SECRET',
+  'NVIDIA_API_KEY',
 ];
 
 /** Shape-based detection, so an unset env var cannot hide a committed secret. */
@@ -49,6 +50,10 @@ const SHAPE_PATTERNS = [
     name: 'Supabase service_role JWT (encoded)',
     re: /eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]*c2VydmljZV9yb2xl/,
   },
+  // Supabase's new key format (legacy JWT keys retire early 2027). The publishable key
+  // is SAFE in a browser by design; only the secret key is a finding.
+  { name: 'Supabase secret key (new format)', re: /sb_secret_[A-Za-z0-9_-]{8,}/ },
+  { name: 'NVIDIA NIM API key', re: /nvapi-[A-Za-z0-9_-]{16,}/ },
   { name: 'Anthropic API key', re: /sk-ant-[A-Za-z0-9_-]{16,}/ },
   { name: 'OpenAI API key', re: /sk-(?:proj-)?[A-Za-z0-9]{32,}/ },
   { name: 'Stripe secret key', re: /sk_(?:live|test)_[A-Za-z0-9]{16,}/ },

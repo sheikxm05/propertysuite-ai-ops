@@ -12,6 +12,24 @@
  * signed-in visitor onward and each page states its own requirement.
  */
 
+/**
+ * ORCHESTRATOR (w-pre), build fix: the auth segment is rendered per request, never
+ * statically generated.
+ *
+ * Two reasons, the second of which is the one that matters:
+ *  1. These pages are session-dependent. `middleware.ts` redirects a signed-in visitor
+ *     away from /sign-in, /sign-up and /forgot-password, so a statically generated copy
+ *     is the wrong artefact to serve.
+ *  2. Prerendering /sign-up failed at build time with
+ *     `TypeError: Cannot read properties of undefined (reading 'name')`, while the same
+ *     page returns HTTP 200 from the dev server — i.e. the runtime path is fine and only
+ *     static generation breaks. Forcing dynamic uses exactly the path dev exercises.
+ *
+ * The underlying prerender incompatibility (client form primitives + useActionState) is
+ * NOT diagnosed, only avoided. Recorded as an open item rather than claimed as fixed.
+ */
+export const dynamic = 'force-dynamic';
+
 import Link from 'next/link';
 import { ShieldCheck } from 'lucide-react';
 
