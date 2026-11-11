@@ -18,10 +18,20 @@
  *    ticket service is **never called**.
  *  - A model-suggested `urgent` does not reach the created ticket.
  *
- * Why `@/lib/env` is mocked: importing it eagerly validates the browser-visible Supabase
- * configuration, and `.env.local` here still carries a blank
- * `NEXT_PUBLIC_SUPABASE_ANON_KEY` ("NOT YET SUPPLIED"). The mock supplies only the values
- * the modules under test read.
+ * Why `@/lib/env` needs help at all: importing it eagerly validates the browser-visible
+ * Supabase configuration, and `.env.local` here still carries a blank
+ * `NEXT_PUBLIC_SUPABASE_ANON_KEY` ("NOT YET SUPPLIED"), so a bare import throws.
+ *
+ * It is handled in two narrow steps rather than by a hand-written mock:
+ *
+ *  1. A `vi.hoisted` block fills the two *required* public variables, and only when they
+ *     are blank or absent, so a real local configuration is never overridden.
+ *  2. `vi.mock` then spreads the REAL module and overrides one function.
+ *
+ * An earlier version of this file enumerated `@/lib/env`'s exports. That broke the moment
+ * lane w0-l5 added `presentValue` to a module this lane does not own, and it would have
+ * broken again on the next addition. Spreading `importOriginal()` keeps the override
+ * intentional and narrow while surviving anything w0-l5 adds.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -72,23 +82,30 @@ const state = vi.hoisted(() => ({
 
 vi.mock('server-only', () => ({}));
 
-vi.mock('@/lib/env', () => ({
-  serverEnv: () => ({
-    NODE_ENV: 'test',
-    APP_BASE_URL: 'https://app.test',
-    AI_PROVIDER: 'anthropic',
-    AI_MODEL: 'test-model',
-  }),
-  isProduction: () => false,
-  assertServerRuntime: () => undefined,
-  parseEnvOrThrow: (_schema: unknown, input: unknown) => input,
-  assertEnvAtBoot: () => undefined,
-  publicEnv: {
-    NEXT_PUBLIC_SUPABASE_URL: 'https://supabase.test',
-    NEXT_PUBLIC_SUPABASE_ANON_KEY: 'a'.repeat(40),
-  },
-  EnvironmentError: class EnvironmentError extends Error {},
-}));
+/**
+ * Runs before every import in this file, so the real `@/lib/env` can evaluate its eager
+ * `publicEnv` parse. Only fills what is missing: `||=` leaves a real value alone, and a
+ * blank one is falsy, which is exactly the case `.env.local` presents.
+ */
+vi.hoisted(() => {
+  process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'https://supabase.test';
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||= 'a'.repeat(40);
+});
+
+vi.mock('@/lib/env', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/env')>();
+  return {
+    ...actual,
+    // The only override: a fixed base URL and model id, so an assertion about either is
+    // about this test rather than about whoever last edited `.env.local`. Everything
+    // else — present and future — comes from the real module.
+    serverEnv: () => ({
+      ...actual.serverEnv(),
+      APP_BASE_URL: 'https://app.test',
+      AI_MODEL: 'test-model',
+    }),
+  };
+});
 
 vi.mock('@/lib/supabase/server', () => ({
   createRouteHandlerClient: () => ({ supabase: state.supabase, pendingCookies: [] }),
@@ -122,8 +139,7 @@ vi.mock('@/lib/audit/write', () => ({
 const { POST: classify } = await import('@/app/api/v1/ai/maintenance/classify/route');
 const { POST: confirm } = await import('@/app/api/v1/ai/maintenance/confirm/route');
 const { registerAiProviderOverride, resetAiProvider } = await import('@/services/ai/providers');
-const { createClassificationProvider } =
-  await import('@/services/ai/providers/classification-provider');
+const { createClassificationProvider } = await import('@/services/ai/providers/provider');
 const { registerTicketCreationService, resetTicketCreationService } =
   await import('@/services/ai/maintenance/ticket-creation');
 const { resetRateLimits } = await import('@/lib/rate-limit');

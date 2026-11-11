@@ -13,7 +13,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { Row, SetupClient } from './driver';
 import type { OrgFixture } from './fixtures';
 import { SHARED_SHAPE } from './fixtures';
 
@@ -47,7 +47,7 @@ export function pathTo(target: string): string[] {
  * starting state must not itself depend on the policy being tested.
  */
 export async function createScratchTicket(
-  service: SupabaseClient,
+  setup: SetupClient,
   f: OrgFixture,
   options: ScratchTicketOptions = {},
 ): Promise<string> {
@@ -57,7 +57,7 @@ export async function createScratchTicket(
   const unit = onUnownedProperty ? f.units.p2u1 : f.units.p1u1;
   const tenancy = onUnownedProperty ? f.tenancies.tc3 : f.tenancies.tc1;
 
-  const { error } = await service.from('maintenance_tickets').insert({
+  const { error } = await setup.insert('maintenance_tickets', {
     id,
     organization_id: f.organizationId,
     property_id: property,
@@ -76,9 +76,9 @@ export async function createScratchTicket(
   }
 
   for (const next of pathTo(status)) {
-    const patch: Record<string, unknown> = { status: next };
+    const patch: Row = { status: next };
     if (next === 'assigned') patch.assigned_provider_id = f.providers[provider];
-    const step = await service.from('maintenance_tickets').update(patch).eq('id', id);
+    const step = await setup.update('maintenance_tickets', patch, { id });
     if (step.error) {
       throw new Error(
         `Could not walk scratch ticket ${id} to ${next}: ${step.error.message}. ` +
@@ -91,15 +91,38 @@ export async function createScratchTicket(
   return id;
 }
 
-/** Reads a single column of a scratch row with the service-role client. Setup only. */
+/**
+ * Reads a scratch ticket's status with the privileged client. Setup and verification
+ * only: this answers "did the write land?", never "was the caller allowed to?".
+ */
 export async function readScratchStatus(
-  service: SupabaseClient,
+  setup: SetupClient,
   ticketId: string,
 ): Promise<string | null> {
-  const { data } = await service
-    .from('maintenance_tickets')
-    .select('status')
-    .eq('id', ticketId)
-    .maybeSingle();
-  return data ? ((data as { status: string }).status ?? null) : null;
+  const { data } = await setup.select('maintenance_tickets', {
+    columns: 'status',
+    eq: { id: ticketId },
+  });
+  const row = (data ?? [])[0] as { status?: string } | undefined;
+  return row?.status ?? null;
+}
+
+/**
+ * Removes the scratch tickets a run created, so a live database is left as it was
+ * found. Safe because a scratch ticket never has activity rows: nothing in 0003
+ * auto-writes one, and `maintenance_activities` cannot be deleted even by the owner, so
+ * a ticket that had any would be undeletable.
+ */
+export async function deleteScratchTickets(
+  setup: SetupClient,
+  ticketIds: readonly string[],
+): Promise<{ removed: number; failed: string[] }> {
+  const failed: string[] = [];
+  let removed = 0;
+  for (const id of ticketIds) {
+    const { error } = await setup.remove('maintenance_tickets', { id });
+    if (error) failed.push(`${id}: ${error.code} ${error.message}`);
+    else removed += 1;
+  }
+  return { removed, failed };
 }

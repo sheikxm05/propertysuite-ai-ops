@@ -1,11 +1,12 @@
 /**
  * Global setup and teardown for the RLS suite. Lane w0-l6.
  *
- * setup()    Resolves the local stack, proves it is actually reachable, and clears the
- *            coverage parts from the previous run. It THROWS when the stack is absent.
- *            It deliberately does not skip: a hard gate that reports success when it
- *            could not run is worse than no gate, because Wave 1 is cleared to start on
- *            the strength of it.
+ * setup()    Selects a driver, proves the database is actually reachable AND that
+ *            principal impersonation works, prints which transport is in play, and
+ *            clears the previous run's coverage parts. It THROWS when no driver can
+ *            run. It deliberately does not skip: a hard gate that reports success when
+ *            it could not run is worse than no gate, because Wave 1 is cleared to start
+ *            on the strength of it.
  *
  * teardown() Reconciles the §4 matrix, what the suite exercised, and the policies that
  *            actually exist in the migrations; writes the report; and fails the run if
@@ -15,14 +16,15 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { loadJwtFactory } from './jwt-factory';
+import { buildDriver } from './world';
 import { NO_IN_ORG_NEGATIVE, matrixCells, type MatrixCell } from './policy-matrix';
 import {
   COVERAGE_DIR,
   REPORT_PATH,
   STORAGE_POLICIES,
+  beginCoverageRun,
+  coveragePartSummary,
   mergeCoverageParts,
-  resetCoverageDirectory,
   type CoverageRecord,
 } from './policy-coverage';
 import { parsePolicies } from './tables';
@@ -30,49 +32,75 @@ import { parsePolicies } from './tables';
 const banner = (text: string) => `\n${'='.repeat(78)}\n${text}\n${'='.repeat(78)}`;
 
 export async function setup(): Promise<void> {
-  const factory = await loadJwtFactory();
-
-  let creds;
+  let driver;
   try {
-    creds = factory.resolveStackCredentials();
+    driver = await buildDriver();
+    await driver.preflight();
   } catch (error) {
     throw new Error(
       `${banner('RLS ISOLATION SUITE CANNOT RUN')}\n` +
-        `${error instanceof Error ? error.message : String(error)}\n` +
+        `${error instanceof Error ? error.message : String(error)}\n\n` +
         'Nothing below this point is skipped quietly: the suite fails, because an\n' +
         'unproven isolation claim must never read as a passing gate.',
     );
   }
 
-  // A reachable REST endpoint is the cheapest proof that Postgres is actually up.
-  const probe = await fetch(`${creds.url}/rest/v1/`, {
-    headers: { apikey: creds.anonKey },
-  }).catch((error: unknown) => error as Error);
+  // Which transport is in play changes what the run can and cannot prove, so it is
+  // stated once, up front, rather than left to be inferred from which cases skipped.
+  console.log(
+    [
+      banner('RLS ISOLATION SUITE'),
+      driver.describe(),
+      driver.supportsHttpStorage
+        ? 'storage: HTTP signed-URL behaviour IS exercised'
+        : 'storage: policy-level only — signed-URL minting and expiry are NOT exercised ' +
+          'on this transport',
+      '',
+    ].join('\n'),
+  );
 
-  if (probe instanceof Error) {
-    throw new Error(
-      `${banner('RLS ISOLATION SUITE CANNOT RUN')}\n` +
-        `Resolved ${creds.url} but could not reach it: ${probe.message}\n\n` +
-        'Start the stack:\n' +
-        '  node scripts/supabase-local.mjs doctor   # tells you exactly what is missing\n' +
-        '  npm run db:start\n',
-    );
-  }
+  await driver.dispose();
 
-  resetCoverageDirectory();
+  // Must happen before any worker spawns: the run id is published through the
+  // environment and Vitest forwards it to the workers it starts afterwards.
+  const runId = beginCoverageRun();
   mkdirSync(COVERAGE_DIR, { recursive: true });
+  console.log(`coverage ledger: run ${runId}\n`);
 }
 
 export async function teardown(): Promise<void> {
+  const parts = coveragePartSummary();
   const records = mergeCoverageParts();
   const cells = matrixCells();
   const sqlPolicies = parsePolicies();
 
-  const report = buildReport(cells, records, sqlPolicies);
+  const report = buildReport(cells, records, sqlPolicies, parts);
 
   mkdirSync(COVERAGE_DIR, { recursive: true });
   writeFileSync(REPORT_PATH, report.markdown, 'utf8');
   console.log(report.console);
+
+  // "Not evaluated" is not "passed", and it is not "failed" either.
+  //
+  // If the ledger has no part files, no assertion ran at all — the suite was filtered
+  // out, or collection died before the first test. Reporting 754 coverage gaps then is
+  // worse than useless: it is a wall of red with no security meaning, on somebody
+  // else's default command, and a gate that cries wolf stops being read. Say plainly
+  // that it was not evaluated and exit cleanly; the suite's own pass/fail already
+  // carries whether it ran.
+  if (parts.length === 0) {
+    console.log(
+      [
+        banner('RLS POLICY COVERAGE — NOT EVALUATED'),
+        'No assertions were recorded, so coverage was not measured. This is not a pass:',
+        'the isolation claim is simply unproven in this run.',
+        '',
+        'To evaluate it:  npm run test:rls      (or PS_RLS=1 npx vitest run)',
+        '',
+      ].join('\n'),
+    );
+    return;
+  }
 
   if (report.gaps.length > 0) {
     throw new Error(
@@ -98,6 +126,7 @@ function buildReport(
   cells: MatrixCell[],
   records: (CoverageRecord & { count: number })[],
   sqlPolicies: { name: string; table: string; command: string; file: string }[],
+  parts: { file: string; records: number }[],
 ): ReportResult {
   const seen = new Set(
     records.map((r) => `${r.dimension}|${r.table}|${r.role}|${r.operation}|${r.outcome}`),
@@ -208,6 +237,12 @@ function buildReport(
 
   const consoleLines = [
     banner('RLS POLICY COVERAGE'),
+    `ledger parts        : ${
+      parts.length === 0
+        ? 'NONE FOUND — the ledger is empty, so every cell below will read as a gap. ' +
+          'That is a harness fault, not a coverage result.'
+        : parts.map((p) => `${p.file} (${p.records})`).join(', ')
+    }`,
     `matrix cells        : ${cells.length}`,
     `assertions recorded : ${records.reduce((n, r) => n + r.count, 0)}`,
     `policies in SQL     : ${sqlPolicies.length}`,

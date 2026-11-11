@@ -17,7 +17,7 @@
  * being tested, and the shared fixture must survive the file.
  */
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   ALLOWED_TRANSITIONS,
   TICKET_STATUSES,
@@ -30,11 +30,15 @@ import {
   TRIGGER_CONFLICT_CODE,
   clientFor,
   createScratchTicket,
+  deleteScratchTickets,
   getWorld,
   org as orgFixture,
   readScratchStatus,
   recordCoverage,
   recordPass,
+  trackScratchTicket,
+  type OrgFixture,
+  type ScratchTicketOptions,
   type World,
 } from '../_harness';
 import type { MemberRole } from '../_harness';
@@ -43,6 +47,25 @@ let world: World;
 
 beforeAll(async () => {
   world = await getWorld();
+});
+
+/**
+ * Every case gets its own ticket. The shared fixture must survive the file, and a
+ * second run must start from the same state: a test that walked a fixture ticket to
+ * `completed` would make its own edge illegal the next time round, which looks exactly
+ * like a security finding and is not one.
+ */
+const scratch = async (f: OrgFixture, options: ScratchTicketOptions = {}) =>
+  trackScratchTicket(world, await createScratchTicket(world.setup, f, options));
+
+afterAll(async () => {
+  if (!world) return;
+  const { failed } = await deleteScratchTickets(world.setup, world.scratchTickets);
+  // Reported, not thrown: leftover scratch rows are untidy, not a security result.
+  if (failed.length > 0) {
+    console.warn(`Could not remove ${failed.length} scratch ticket(s):\n  ${failed.join('\n  ')}`);
+  }
+  world.scratchTickets.length = 0;
 });
 
 /** Every ordered pair of distinct statuses, partitioned by the shared rule set. */
@@ -90,13 +113,14 @@ describe('the database rejects every illegal transition', () => {
   for (const { from, to } of ILLEGAL) {
     it(`${from} -> ${to} is refused, even for an organization admin`, async () => {
       const f = orgFixture(world, 'A');
-      const ticketId = await createScratchTicket(world.service, f, { status: from });
+      const ticketId = await scratch(f, { status: from });
 
-      const { error } = await clientFor(world, 'A', 'organization_admin')
-        .from('maintenance_tickets')
-        .update({ status: to })
-        .eq('id', ticketId)
-        .select('id');
+      const { error } = await clientFor(world, 'A', 'organization_admin').update(
+        'maintenance_tickets',
+        { status: to },
+        { id: ticketId },
+        'id',
+      );
 
       expect(
         error,
@@ -113,7 +137,7 @@ describe('the database rejects every illegal transition', () => {
           'to CONFLICT 409.',
       ).toBe(TRIGGER_CONFLICT_CODE);
 
-      expect(await readScratchStatus(world.service, ticketId)).toBe(from);
+      expect(await readScratchStatus(world.setup, ticketId)).toBe(from);
       recordCoverage({
         dimension: 'state_machine',
         table: 'maintenance_tickets',
@@ -135,19 +159,23 @@ describe('the database accepts every legal transition', () => {
       const permitted = TRANSITION_ROLES[from][to] ?? [];
       expect(permitted.length, `no role may drive ${from} -> ${to}`).toBeGreaterThan(0);
 
-      const ticketId = await createScratchTicket(world.service, f, { status: from });
+      const ticketId = await scratch(f, { status: from });
       const patch: Record<string, unknown> = { status: to };
       if (to === 'assigned') patch.assigned_provider_id = f.providers.sp1;
 
-      const { data, error } = await clientFor(world, 'A', 'organization_admin')
-        .from('maintenance_tickets')
-        .update(patch)
-        .eq('id', ticketId)
-        .select('id');
+      const { data, error } = await clientFor(world, 'A', 'organization_admin').update(
+        'maintenance_tickets',
+        patch,
+        { id: ticketId },
+        'id,status',
+      );
 
       expect(error, `${from} -> ${to} was refused: ${error?.message}`).toBeNull();
       expect((data ?? []).length, `${from} -> ${to} affected no rows`).toBe(1);
-      expect(await readScratchStatus(world.service, ticketId)).toBe(to);
+      // Asserted from the statement's own RETURNING, not from a follow-up read: the pg
+      // driver rolls every operation back, so the committed row is deliberately
+      // unchanged. The claim under test is that the write was ACCEPTED.
+      expect((data ?? [])[0]?.status, `${from} -> ${to} did not take effect`).toBe(to);
 
       recordCoverage({
         dimension: 'state_machine',
@@ -166,22 +194,25 @@ describe('a service provider drives only its own two edges', () => {
   it('moves an assigned ticket to in_progress and then to awaiting_approval', async () => {
     const f = orgFixture(world, 'A');
     const client = clientFor(world, 'A', 'service_provider');
-    const ticketId = await createScratchTicket(world.service, f, {
-      status: 'assigned',
-      provider: 'sp1',
-    });
 
-    for (const to of ['in_progress', 'awaiting_approval'] as const) {
-      const { data, error } = await client
-        .from('maintenance_tickets')
-        .update({ status: to })
-        .eq('id', ticketId)
-        .select('id');
+    // One edge at a time, each on a ticket seeded to that edge's starting status and
+    // each proven by its own RETURNING. Chaining them in one transaction is not
+    // available: the pg driver rolls each operation back by design.
+    for (const [from, to] of [
+      ['assigned', 'in_progress'],
+      ['in_progress', 'awaiting_approval'],
+    ] as const) {
+      const stepTicket = await scratch(f, { status: from, provider: 'sp1' });
+      const { data, error } = await client.update(
+        'maintenance_tickets',
+        { status: to },
+        { id: stepTicket },
+        'id,status',
+      );
       expect(error, `provider could not move its own job to ${to}: ${error?.message}`).toBeNull();
       expect((data ?? []).length).toBe(1);
+      expect((data ?? [])[0]?.status).toBe(to);
     }
-
-    expect(await readScratchStatus(world.service, ticketId)).toBe('awaiting_approval');
     recordTicketUpdate('service_provider', 'allow', 'assigned -> in_progress -> awaiting_approval');
   });
 
@@ -189,24 +220,25 @@ describe('a service provider drives only its own two edges', () => {
     // §4: only a manager, an admin, or the reporting tenant closes to `completed`. A
     // provider signing off its own job is the self-approval hole.
     const f = orgFixture(world, 'A');
-    const ticketId = await createScratchTicket(world.service, f, {
+    const ticketId = await scratch(f, {
       status: 'awaiting_approval',
       provider: 'sp1',
     });
 
     expect(canTransition('awaiting_approval', 'completed', 'service_provider')).toBe(false);
 
-    const { data, error } = await clientFor(world, 'A', 'service_provider')
-      .from('maintenance_tickets')
-      .update({ status: 'completed' })
-      .eq('id', ticketId)
-      .select('id');
+    const { data, error } = await clientFor(world, 'A', 'service_provider').update(
+      'maintenance_tickets',
+      { status: 'completed' },
+      { id: ticketId },
+      'id',
+    );
 
     expect(
       error !== null || (data ?? []).length === 0,
       'a service provider approved its own completion',
     ).toBe(true);
-    expect(await readScratchStatus(world.service, ticketId)).toBe('awaiting_approval');
+    expect(await readScratchStatus(world.setup, ticketId)).toBe('awaiting_approval');
     recordTicketUpdate('service_provider', 'deny', 'awaiting_approval -> completed');
   });
 
@@ -219,21 +251,22 @@ describe('a service provider drives only its own two edges', () => {
     ] as const) {
       expect(canTransition(from, to, 'service_provider')).toBe(false);
 
-      const ticketId = await createScratchTicket(world.service, f, {
+      const ticketId = await scratch(f, {
         status: from,
         provider: 'sp1',
       });
-      const { data, error } = await clientFor(world, 'A', 'service_provider')
-        .from('maintenance_tickets')
-        .update({ status: to })
-        .eq('id', ticketId)
-        .select('id');
+      const { data, error } = await clientFor(world, 'A', 'service_provider').update(
+        'maintenance_tickets',
+        { status: to },
+        { id: ticketId },
+        'id',
+      );
 
       expect(
         error !== null || (data ?? []).length === 0,
         `a service provider drove ${from} -> ${to}, which §4 reserves for staff`,
       ).toBe(true);
-      expect(await readScratchStatus(world.service, ticketId)).toBe(from);
+      expect(await readScratchStatus(world.setup, ticketId)).toBe(from);
     }
     recordTicketUpdate('service_provider', 'deny', 'provider cannot cancel or rework');
   });
@@ -242,19 +275,21 @@ describe('a service provider drives only its own two edges', () => {
 describe('a tenant may withdraw only while nobody has started', () => {
   it('cancels its own open ticket', async () => {
     const f = orgFixture(world, 'A');
-    const ticketId = await createScratchTicket(world.service, f, { status: 'open', tenant: 't1' });
+    const ticketId = await scratch(f, { status: 'open', tenant: 't1' });
 
-    const { data, error } = await clientFor(world, 'A', 'tenant')
-      .from('maintenance_tickets')
-      .update({ status: 'cancelled' })
-      .eq('id', ticketId)
-      .select('id');
+    const { data, error } = await clientFor(world, 'A', 'tenant').update(
+      'maintenance_tickets',
+      { status: 'cancelled' },
+      { id: ticketId },
+      'id,status',
+    );
 
     expect(
       error,
       `a tenant could not withdraw their own open request: ${error?.message}`,
     ).toBeNull();
     expect((data ?? []).length).toBe(1);
+    expect((data ?? [])[0]?.status).toBe('cancelled');
     recordTicketUpdate('tenant', 'allow', 'open -> cancelled');
   });
 
@@ -263,23 +298,24 @@ describe('a tenant may withdraw only while nobody has started', () => {
     const f = orgFixture(world, 'A');
     expect(canTransition('assigned', 'cancelled', 'tenant')).toBe(false);
 
-    const ticketId = await createScratchTicket(world.service, f, {
+    const ticketId = await scratch(f, {
       status: 'assigned',
       tenant: 't1',
       provider: 'sp1',
     });
 
-    const { data, error } = await clientFor(world, 'A', 'tenant')
-      .from('maintenance_tickets')
-      .update({ status: 'cancelled' })
-      .eq('id', ticketId)
-      .select('id');
+    const { data, error } = await clientFor(world, 'A', 'tenant').update(
+      'maintenance_tickets',
+      { status: 'cancelled' },
+      { id: ticketId },
+      'id',
+    );
 
     expect(
       error !== null || (data ?? []).length === 0,
       'a tenant cancelled a ticket that had already been assigned',
     ).toBe(true);
-    expect(await readScratchStatus(world.service, ticketId)).toBe('assigned');
+    expect(await readScratchStatus(world.setup, ticketId)).toBe('assigned');
     recordTicketUpdate('tenant', 'deny', 'assigned -> cancelled');
   });
 
@@ -287,23 +323,25 @@ describe('a tenant may withdraw only while nobody has started', () => {
     const f = orgFixture(world, 'A');
     expect(canTransition('awaiting_approval', 'completed', 'tenant')).toBe(true);
 
-    const ticketId = await createScratchTicket(world.service, f, {
+    const ticketId = await scratch(f, {
       status: 'awaiting_approval',
       tenant: 't1',
       provider: 'sp1',
     });
 
-    const { data, error } = await clientFor(world, 'A', 'tenant')
-      .from('maintenance_tickets')
-      .update({ status: 'completed' })
-      .eq('id', ticketId)
-      .select('id');
+    const { data, error } = await clientFor(world, 'A', 'tenant').update(
+      'maintenance_tickets',
+      { status: 'completed' },
+      { id: ticketId },
+      'id,status',
+    );
 
     expect(
       error,
       `the reporting tenant could not confirm completion: ${error?.message}`,
     ).toBeNull();
     expect((data ?? []).length).toBe(1);
+    expect((data ?? [])[0]?.status).toBe('completed');
     recordTicketUpdate('tenant', 'allow', 'awaiting_approval -> completed');
   });
 
@@ -311,18 +349,19 @@ describe('a tenant may withdraw only while nobody has started', () => {
     const f = orgFixture(world, 'A');
     expect(canTransition('open', 'assigned', 'tenant')).toBe(false);
 
-    const ticketId = await createScratchTicket(world.service, f, { status: 'open', tenant: 't1' });
-    const { data, error } = await clientFor(world, 'A', 'tenant')
-      .from('maintenance_tickets')
-      .update({ status: 'assigned', assigned_provider_id: f.providers.sp1 })
-      .eq('id', ticketId)
-      .select('id');
+    const ticketId = await scratch(f, { status: 'open', tenant: 't1' });
+    const { data, error } = await clientFor(world, 'A', 'tenant').update(
+      'maintenance_tickets',
+      { status: 'assigned', assigned_provider_id: f.providers.sp1 },
+      { id: ticketId },
+      'id',
+    );
 
     expect(
       error !== null || (data ?? []).length === 0,
       'a tenant assigned a contractor, which is a manager`s decision and a cost',
     ).toBe(true);
-    expect(await readScratchStatus(world.service, ticketId)).toBe('open');
+    expect(await readScratchStatus(world.setup, ticketId)).toBe('open');
     recordTicketUpdate('tenant', 'deny', 'open -> assigned');
   });
 });
@@ -335,21 +374,22 @@ describe('a property owner never drives a ticket', () => {
     for (const { from, to } of LEGAL) {
       expect(canTransition(from, to, 'property_owner')).toBe(false);
 
-      const ticketId = await createScratchTicket(world.service, f, {
+      const ticketId = await scratch(f, {
         status: from,
         provider: 'sp1',
       });
-      const { data, error } = await clientFor(world, 'A', 'property_owner')
-        .from('maintenance_tickets')
-        .update({ status: to })
-        .eq('id', ticketId)
-        .select('id');
+      const { data, error } = await clientFor(world, 'A', 'property_owner').update(
+        'maintenance_tickets',
+        { status: to },
+        { id: ticketId },
+        'id',
+      );
 
       expect(
         error !== null || (data ?? []).length === 0,
         `a property owner drove ${from} -> ${to}`,
       ).toBe(true);
-      expect(await readScratchStatus(world.service, ticketId)).toBe(from);
+      expect(await readScratchStatus(world.setup, ticketId)).toBe(from);
     }
     recordTicketUpdate('property_owner', 'deny', 'owner drives no edge');
   });
@@ -359,19 +399,20 @@ describe('a terminal ticket stays terminal', () => {
   it('nothing leaves completed or cancelled', async () => {
     const f = orgFixture(world, 'A');
     for (const terminal of ['completed', 'cancelled'] as TicketStatus[]) {
-      const ticketId = await createScratchTicket(world.service, f, { status: terminal });
+      const ticketId = await scratch(f, { status: terminal });
       for (const to of TICKET_STATUSES.filter((s) => s !== terminal)) {
-        const { error } = await clientFor(world, 'A', 'organization_admin')
-          .from('maintenance_tickets')
-          .update({ status: to })
-          .eq('id', ticketId)
-          .select('id');
+        const { error } = await clientFor(world, 'A', 'organization_admin').update(
+          'maintenance_tickets',
+          { status: to },
+          { id: ticketId },
+          'id',
+        );
         expect(
           error,
           `${terminal} -> ${to} was accepted; terminal must mean terminal`,
         ).not.toBeNull();
       }
-      expect(await readScratchStatus(world.service, ticketId)).toBe(terminal);
+      expect(await readScratchStatus(world.setup, ticketId)).toBe(terminal);
     }
     recordPass({ dimension: 'state_machine', label: 'terminal statuses have no exit' });
   });

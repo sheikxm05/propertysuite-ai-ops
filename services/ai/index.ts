@@ -3,6 +3,12 @@
  *
  * This barrel is the surface other lanes code against. Lane w1-l6 reaches the adapter
  * through `getAiProvider()` and the types below; it writes no code under `services/ai`.
+ * Two capabilities are exposed: `classify` for maintenance intake and
+ * `extractDocumentFields` for w1-l6's document pipeline.
+ *
+ * Importing this barrel evaluates `providers/index.ts`, which reads validated
+ * configuration and can construct an HTTP client. A module that wants only the fence
+ * should deep-import `@/services/ai/fence`, as `services/extraction/fence.ts` does.
  *
  * THE ONE SENTENCE THAT MATTERS
  * The model drafts, a human commits. Nothing exported here mutates anything. No function
@@ -14,10 +20,11 @@
  * credentials.
  *
  * Reading order for a reviewer who has five minutes:
- *   providers/types.ts   — note the absence of a system-prompt parameter
+ *   providers/types.ts   — note the absence of a system-prompt parameter on either method
  *   fence.ts             — the only path untrusted text takes into a request
- *   prompts/*            — the frozen, versioned instruction
- *   providers/classification-provider.ts — validate-or-throw, one retry, no partial apply
+ *   prompts/*            — the frozen, versioned instructions
+ *   providers/provider.ts — validate-or-throw, one retry, no partial apply, and
+ *                           `requires_human_review` forced on for every extraction
  */
 
 export {
@@ -47,31 +54,44 @@ export {
 } from './fence';
 
 export {
+  ACTIVE_DOCUMENT_EXTRACTION_PROMPT,
   ACTIVE_MAINTENANCE_CLASSIFICATION_PROMPT,
+  DOCUMENT_EXTRACTION_PROMPTS,
   MAINTENANCE_CLASSIFICATION_PROMPTS,
+  documentExtractionPrompt,
   maintenanceClassificationPrompt,
   promptFingerprint,
   type VersionedPrompt,
 } from './prompts/registry';
 
 export {
+  REVIEW_FLAG_OVERRIDE_NOTE,
+  createAiProvider,
   createAnthropicProvider,
   createClassificationProvider,
+  evaluateDocumentReply,
   evaluateReply,
+  evaluateWith,
   getAiProvider,
   hasAnthropicCredential,
   registerAiProviderOverride,
   resetAiProvider,
+  type AiCallOptions,
   type AiProvider,
   type ClassificationProviderOptions,
   type ClassificationResult,
   type ClassifyInput,
   type ClassifyOptions,
+  type DocumentExtractionResult,
+  type DocumentTrustedContext,
+  type ExtractDocumentInput,
   type ModelCallReply,
   type ModelCallRequest,
+  type ModelProviderOptions,
   type ModelTransport,
   type TrustedContext,
   type UnitResolution,
+  type UntrustedDocument,
   type UntrustedInput,
 } from './providers';
 
@@ -107,3 +127,10 @@ export {
   type TicketCreationCaller,
   type TicketCreationService,
 } from './maintenance/ticket-creation';
+
+export {
+  DOCUMENT_FIELD_EXTRACTOR_ID,
+  createDocumentFieldExtractorBinding,
+  type DocumentFieldExtractionRequest,
+  type DocumentFieldExtractorBinding,
+} from './documents/extractor-binding';

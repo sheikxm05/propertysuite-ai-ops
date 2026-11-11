@@ -13,10 +13,12 @@
  *  3. An upstream refusal propagates under its own frozen error code, and an
  *     unrecognised success body is a failure rather than an unvalidated "ticket".
  *
- * `@/lib/env` is mocked because importing it eagerly validates the Supabase public
+ * `@/lib/env` needs help because importing it eagerly validates the Supabase public
  * configuration, and this checkout's `.env.local` still has
- * `NEXT_PUBLIC_SUPABASE_ANON_KEY` blank ("NOT YET SUPPLIED"). The mock supplies the two
- * values the module under test reads and nothing else.
+ * `NEXT_PUBLIC_SUPABASE_ANON_KEY` blank ("NOT YET SUPPLIED"). A `vi.hoisted` block fills
+ * the blanks, then `vi.mock` spreads the REAL module and overrides one function — rather
+ * than enumerating exports, which broke when lane w0-l5 added `presentValue` to a module
+ * this lane does not own.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -24,23 +26,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiRouteError } from '@/lib/api/errors';
 import type { CreateTicketInput } from '@shared/index';
 
-vi.mock('@/lib/env', () => ({
-  serverEnv: () => ({
-    NODE_ENV: 'test',
-    APP_BASE_URL: 'https://app.test',
-    AI_PROVIDER: 'anthropic',
-    AI_MODEL: 'claude-sonnet-5',
-  }),
-  isProduction: () => false,
-  assertServerRuntime: () => undefined,
-  parseEnvOrThrow: (_schema: unknown, input: unknown) => input,
-  assertEnvAtBoot: () => undefined,
-  publicEnv: {
-    NEXT_PUBLIC_SUPABASE_URL: 'https://supabase.test',
-    NEXT_PUBLIC_SUPABASE_ANON_KEY: 'a'.repeat(40),
-  },
-  EnvironmentError: class EnvironmentError extends Error {},
-}));
+/** Fills only what is blank, so a real local configuration is never overridden. */
+vi.hoisted(() => {
+  process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'https://supabase.test';
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||= 'a'.repeat(40);
+});
+
+vi.mock('@/lib/env', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/env')>();
+  return {
+    ...actual,
+    // One override. `createHttpTicketCreationService()` with no argument must reach for
+    // `serverEnv().APP_BASE_URL`, and the test asserts which URL it got — so the value
+    // has to be this file's, not `.env.local`'s.
+    serverEnv: () => ({ ...actual.serverEnv(), APP_BASE_URL: 'https://app.test' }),
+  };
+});
 
 import {
   MAINTENANCE_TICKETS_PATH,

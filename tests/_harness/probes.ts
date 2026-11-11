@@ -295,7 +295,11 @@ export const PROBES: Readonly<Record<TenantScopedTable, TableProbe>> = {
       return {
         id: randomUUID(),
         organization_id: f.organizationId,
-        property_id: f.properties.p1,
+        // A provider's evidence must be ticket-scoped and NOTHING else:
+        // documents_insert_provider_assigned forces property_id and tenancy_id null,
+        // because a row stapled to an arbitrary tenancy or property would become
+        // visible to that tenancy's tenant and that property's owner.
+        property_id: isProvider ? null : f.properties.p1,
         tenancy_id: isProvider ? null : f.tenancies.tc1,
         document_type: isProvider ? 'completion_evidence' : 'tenancy_contract',
         storage_path: `${f.organizationId}/${isProvider ? 'tickets' : 'tenancies'}/${randomUUID()}.pdf`,
@@ -310,7 +314,7 @@ export const PROBES: Readonly<Record<TenantScopedTable, TableProbe>> = {
     insertOutOfScope: ({ f, actorProfileId, capabilities }) => ({
       id: randomUUID(),
       organization_id: f.organizationId,
-      property_id: f.properties.p1,
+      property_id: null,
       tenancy_id: null,
       document_type: 'completion_evidence',
       storage_path: `${f.organizationId}/tickets/${randomUUID()}.pdf`,

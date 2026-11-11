@@ -125,16 +125,21 @@ describe('the boundary holds for filters as well as for row ids', () => {
         const client = clientFor(world, actor, role);
         for (const table of TENANT_SCOPED_TABLES) {
           if (table === 'organizations' || table === 'profiles') continue; // no such column
-          const { data, error } = await client
-            .from(table)
-            .select('id')
-            .eq('organization_id', targetOrgId);
+          const { data, error } = await client.select(table, {
+            columns: 'id',
+            eq: { organization_id: targetOrgId },
+          });
 
           if (error) {
             // A revoked grant (audit_logs, organization_invitations) is a denial too.
+            // Anything else — a deadlock, a timeout — is contention, not a policy
+            // decision, and must not be read as one.
             expect(
               /permission denied|row-level security/i.test(error.message),
-              `${table}: unexpected error for ${role} of ${actor}: ${error.message}`,
+              `${table}: ${role} of ${actor} got ${error.code ?? '-'}: ${error.message}. ` +
+                'That is not an authorization refusal, so it says nothing about ' +
+                'isolation. 40P01/57014 mean another session is holding locks — check ' +
+                'for a leftover psql process or an idle-in-transaction backend.',
             ).toBe(true);
           } else {
             expect(
@@ -165,11 +170,11 @@ describe('the boundary holds for filters as well as for row ids', () => {
         ['documents', b.documents.d1],
       ];
       for (const [table, id] of targets) {
-        const { data } = await client.from(table).select('id').eq('id', id).maybeSingle();
+        const { data } = await client.select(table, { columns: 'id', eq: { id } });
         expect(
-          data,
+          data ?? [],
           `${table}: ${role} of organization A resolved organization B's row by id`,
-        ).toBeNull();
+        ).toEqual([]);
       }
     }
     recordPass({ dimension: 'integrity', label: 'cross-organization IDOR by row id' });
@@ -179,7 +184,10 @@ describe('the boundary holds for filters as well as for row ids', () => {
 describe('an unauthenticated caller', () => {
   it('reads nothing from any tenant-scoped table', async () => {
     for (const table of TENANT_SCOPED_TABLES) {
-      const { data, error } = await world.anon.from(table).select(probeColumns(table)).limit(1);
+      const { data, error } = await world.anon.select(table, {
+        columns: probeColumns(table),
+        limit: 1,
+      });
       if (error) {
         expect(
           /permission denied|row-level security|JWT|not authorized/i.test(error.message),

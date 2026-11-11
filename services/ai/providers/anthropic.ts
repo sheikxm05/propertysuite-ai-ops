@@ -28,7 +28,7 @@ import { serverEnv } from '@/lib/env';
 import { anthropicApiKey } from '@/lib/server-only/secrets';
 
 import { AiNotConfiguredError, AiProviderError } from '../errors';
-import { createClassificationProvider } from './classification-provider';
+import { createAiProvider } from './provider';
 import type { ModelCallReply, ModelCallRequest, ModelTransport } from './transport';
 import type { AiProvider } from './types';
 
@@ -40,15 +40,12 @@ const REQUEST_TIMEOUT_MS = 45_000;
 /**
  * Reads the API key, treating "configured but blank" as absent.
  *
- * `lib/server-only/secrets.ts` validates `ANTHROPIC_API_KEY` with
- * `z.string().min(10).optional()`. An *unset* variable is `undefined` and passes as
- * absent; a variable that is present but empty — which is how `.env.local` ships it
- * before a key is issued — fails `.min(10)` and throws `EnvironmentError`. Both mean the
- * same thing to this lane: there is no credential. Catching it here turns a confusing
- * boot-shaped failure into the `AiNotConfiguredError` the routes already handle.
- *
- * The narrowest possible accommodation: `lib/**` belongs to another lane, so the fix is
- * reported as a planning defect rather than applied across the boundary.
+ * Lane w0-l5 has since wrapped `ANTHROPIC_API_KEY` in `presentValue`, so a blank value
+ * now resolves to `undefined` inside `lib/server-only/secrets.ts` rather than throwing —
+ * the planning defect this function was written for is fixed. The guard is kept anyway,
+ * deliberately: it is two lines, it still covers a whitespace-only key and any future
+ * throw from a module this lane does not own, and the failure it prevents is every AI
+ * route returning a boot-shaped 500 instead of the clean "not configured" path.
  */
 function readApiKey(): string | null {
   try {
@@ -145,12 +142,13 @@ function toTransportError(error: unknown): Error {
 }
 
 /**
- * The Anthropic-backed classification adapter: the neutral core plus this transport.
+ * The Anthropic-backed adapter: the neutral core plus this transport. Serves both
+ * capabilities — maintenance classification and document field extraction.
  *
  * `AI_MODEL` is read here, once, through the validated env accessor.
  */
 export function createAnthropicProvider(): AiProvider {
-  return createClassificationProvider({
+  return createAiProvider({
     transport: createAnthropicTransport(),
     model: serverEnv().AI_MODEL,
   });

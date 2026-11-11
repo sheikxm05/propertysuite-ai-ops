@@ -35,13 +35,8 @@
  * sees only unit 1204 of P1 and their own two tickets; the provider sees exactly K1.
  */
 
-import type { SupabaseClient } from '@supabase/supabase-js';
-import type {
-  JwtFactoryModule,
-  OrgKey,
-  PrincipalDescriptor,
-  StackCredentials,
-} from './jwt-factory';
+import type { Row, SetupClient } from './driver';
+import type { JwtFactoryModule, OrgKey, PrincipalDescriptor } from './jwt-factory';
 
 export interface OrgFixture {
   key: OrgKey;
@@ -126,26 +121,13 @@ function ids(factory: JwtFactoryModule, org: OrgKey) {
   };
 }
 
-async function upsert(
-  service: SupabaseClient,
-  table: string,
-  rows: Record<string, unknown>[],
-): Promise<void> {
-  const { error } = await service.from(table).upsert(rows, { onConflict: 'id' });
-  if (error) {
-    throw new Error(
-      `Fixture seeding failed on ${table}: ${error.message}` +
-        (error.details ? ` (${error.details})` : '') +
-        `\nThis is a seeding failure, not an RLS result. Check that migrations applied:` +
-        `\n  node scripts/reset-db.mjs`,
-    );
-  }
-}
-
-/** Does `documents.ticket_id` exist? Amendment A7 depends on it; 0002/0003 may not have it. */
-async function detectDocumentsTicketId(service: SupabaseClient): Promise<boolean> {
-  const { error } = await service.from('documents').select('ticket_id').limit(1);
-  return !error;
+/**
+ * Does `documents.ticket_id` exist? Amendment A7 depends on it: 0003 adds the column and
+ * then calls 0002's `ensure_document_provider_policies()`. Probed rather than assumed, so
+ * a half-applied migration reports itself instead of looking like an RLS finding.
+ */
+async function detectDocumentsTicketId(setup: SetupClient): Promise<boolean> {
+  return setup.hasColumn('documents', 'ticket_id');
 }
 
 const isoDate = (offsetDays: number) => {
@@ -155,7 +137,7 @@ const isoDate = (offsetDays: number) => {
 };
 
 async function seedOrganization(
-  service: SupabaseClient,
+  setup: SetupClient,
   factory: JwtFactoryModule,
   org: OrgKey,
   userIdByPrincipal: Map<string, string>,
@@ -177,7 +159,7 @@ async function seedOrganization(
   const tenant2 = byRole('tenant', 'tenant2');
   const provider = byRole('service_provider');
 
-  await upsert(service, 'organizations', [
+  await setup.upsert('organizations', [
     {
       id: f.organizationId,
       name: descriptor.name,
@@ -188,8 +170,7 @@ async function seedOrganization(
 
   // 0003 creates a profile from an auth.users trigger. Upserting here keeps the suite
   // runnable whether or not that trigger has landed, and pins the ids either way.
-  await upsert(
-    service,
+  await setup.upsert(
     'profiles',
     principals.map((p: PrincipalDescriptor) => ({
       id: p.profileId,
@@ -200,8 +181,7 @@ async function seedOrganization(
     })),
   );
 
-  await upsert(
-    service,
+  await setup.upsert(
     'organization_members',
     principals.map((p) => ({
       id: p.memberId,
@@ -212,7 +192,7 @@ async function seedOrganization(
     })),
   );
 
-  await upsert(service, 'properties', [
+  await setup.upsert('properties', [
     {
       id: f.properties.p1,
       organization_id: f.organizationId,
@@ -237,7 +217,7 @@ async function seedOrganization(
     },
   ]);
 
-  await upsert(service, 'property_units', [
+  await setup.upsert('property_units', [
     {
       id: f.units.p1u1,
       organization_id: f.organizationId,
@@ -280,7 +260,7 @@ async function seedOrganization(
     },
   ]);
 
-  await upsert(service, 'tenants', [
+  await setup.upsert('tenants', [
     {
       id: f.tenants.t1,
       organization_id: f.organizationId,
@@ -299,7 +279,7 @@ async function seedOrganization(
     },
   ]);
 
-  await upsert(service, 'tenancies', [
+  await setup.upsert('tenancies', [
     {
       id: f.tenancies.tc1,
       organization_id: f.organizationId,
@@ -338,7 +318,7 @@ async function seedOrganization(
     },
   ]);
 
-  await upsert(service, 'service_providers', [
+  await setup.upsert('service_providers', [
     {
       id: f.providers.sp1,
       organization_id: f.organizationId,
@@ -357,9 +337,15 @@ async function seedOrganization(
     },
   ]);
 
-  // Tickets are inserted as 'open' (§4: a ticket must be inserted as open) and then
-  // walked to their target status along legal edges, so the transition trigger is
-  // satisfied whether it fires on INSERT, on UPDATE, or on both.
+  // `status` and `assigned_provider_id` are deliberately absent from the payload.
+  //
+  // §4 requires a ticket to be inserted as `open`, which the column default gives us.
+  // More importantly, re-seeding must not try to UPDATE the status: on a second run the
+  // row already sits at `in_progress`, and writing `open` over it is an illegal
+  // transition that the trigger correctly rejects. Omitting the column leaves the
+  // status to `ensureTicketStatus`, which walks forward from wherever the row actually
+  // is — so seeding is idempotent against a live database rather than only against a
+  // freshly reset one.
   const ticketBase = (id: string, unit: string, property: string, tenantId: string, i: number) => ({
     id,
     organization_id: f.organizationId,
@@ -370,11 +356,10 @@ async function seedOrganization(
     description: 'Reported through the tenant portal. Seeded fixture row.',
     category: i === 1 ? 'plumbing' : 'hvac',
     priority: 'normal',
-    status: 'open',
     source: 'web',
   });
 
-  await upsert(service, 'maintenance_tickets', [
+  await setup.upsert('maintenance_tickets', [
     {
       ...ticketBase(f.tickets.k1, f.units.p1u1, f.properties.p1, f.tenants.t1, 0),
       tenancy_id: f.tenancies.tc1,
@@ -393,51 +378,58 @@ async function seedOrganization(
     },
   ]);
 
-  await advanceTicket(service, f.tickets.k1, ['assigned'], f.providers.sp1);
-  await advanceTicket(service, f.tickets.k3, ['assigned', 'in_progress'], f.providers.sp2);
+  await ensureTicketStatus(setup, f.tickets.k1, 'assigned', f.providers.sp1);
+  await ensureTicketStatus(setup, f.tickets.k3, 'in_progress', f.providers.sp2);
 
-  await upsert(service, 'maintenance_activities', [
-    {
-      id: f.activities.a1,
-      organization_id: f.organizationId,
-      ticket_id: f.tickets.k1,
-      actor_profile_id: manager.profileId,
-      activity_type: 'assigned',
-      description: 'Assigned to the HVAC contractor.',
-      metadata: {},
-    },
-    {
-      id: f.activities.a2,
-      organization_id: f.organizationId,
-      ticket_id: f.tickets.k2,
-      actor_profile_id: tenant.profileId,
-      activity_type: 'created',
-      description: 'Reported by the tenant.',
-      metadata: {},
-    },
-    {
-      id: f.activities.a3,
-      organization_id: f.organizationId,
-      ticket_id: f.tickets.k3,
-      actor_profile_id: manager.profileId,
-      activity_type: 'in_progress',
-      description: 'Contractor on site.',
-      metadata: {},
-    },
-    {
-      id: f.activities.a4,
-      organization_id: f.organizationId,
-      ticket_id: f.tickets.k4,
-      actor_profile_id: tenant2.profileId,
-      activity_type: 'created',
-      description: 'Reported by the tenant.',
-      metadata: {},
-    },
-  ]);
+  // Append-only: insert-or-skip, never insert-or-update. 0003's
+  // maintenance_activities_block_update trigger refuses an UPDATE even to the table
+  // owner, which is exactly the guarantee negative-writes.test.ts asserts.
+  await setup.upsert(
+    'maintenance_activities',
+    [
+      {
+        id: f.activities.a1,
+        organization_id: f.organizationId,
+        ticket_id: f.tickets.k1,
+        actor_profile_id: manager.profileId,
+        activity_type: 'assigned',
+        description: 'Assigned to the HVAC contractor.',
+        metadata: {},
+      },
+      {
+        id: f.activities.a2,
+        organization_id: f.organizationId,
+        ticket_id: f.tickets.k2,
+        actor_profile_id: tenant.profileId,
+        activity_type: 'created',
+        description: 'Reported by the tenant.',
+        metadata: {},
+      },
+      {
+        id: f.activities.a3,
+        organization_id: f.organizationId,
+        ticket_id: f.tickets.k3,
+        actor_profile_id: manager.profileId,
+        activity_type: 'in_progress',
+        description: 'Contractor on site.',
+        metadata: {},
+      },
+      {
+        id: f.activities.a4,
+        organization_id: f.organizationId,
+        ticket_id: f.tickets.k4,
+        actor_profile_id: tenant2.profileId,
+        activity_type: 'created',
+        description: 'Reported by the tenant.',
+        metadata: {},
+      },
+    ],
+    { ignoreDuplicates: true },
+  );
 
   const objectPath = (entity: string, id: string) => `${f.organizationId}/${entity}/${id}.pdf`;
 
-  const documentRows: Record<string, unknown>[] = [
+  const documentRows: Row[] = [
     {
       id: f.documents.d1,
       organization_id: f.organizationId,
@@ -463,7 +455,10 @@ async function seedOrganization(
     {
       id: f.documents.evidence,
       organization_id: f.organizationId,
-      property_id: f.properties.p1,
+      // Ticket-scoped only, matching what documents_insert_provider_assigned permits a
+      // provider to write: evidence attached to a property or a tenancy would be
+      // readable by that property's owner and that tenancy's tenant.
+      property_id: null,
       tenancy_id: null,
       document_type: 'completion_evidence',
       storage_path: objectPath('tickets', f.documents.evidence),
@@ -474,9 +469,9 @@ async function seedOrganization(
       ...(capabilities.documentsHasTicketId ? { ticket_id: f.tickets.k1 } : {}),
     },
   ];
-  await upsert(service, 'documents', documentRows);
+  await setup.upsert('documents', documentRows);
 
-  await upsert(service, 'ai_conversations', [
+  await setup.upsert('ai_conversations', [
     {
       id: f.conversations.c1,
       organization_id: f.organizationId,
@@ -493,7 +488,7 @@ async function seedOrganization(
     },
   ]);
 
-  await upsert(service, 'ai_messages', [
+  await setup.upsert('ai_messages', [
     {
       id: f.messages.m1,
       organization_id: f.organizationId,
@@ -513,8 +508,7 @@ async function seedOrganization(
   ]);
 
   const notifications: Record<string, string> = {};
-  await upsert(
-    service,
+  await setup.upsert(
     'notifications',
     principals.map((p) => {
       const id = factory.fixtureId(`${org}:notification:${p.key}`);
@@ -532,7 +526,7 @@ async function seedOrganization(
     }),
   );
 
-  await upsert(service, 'audit_logs', [
+  await setup.upsert('audit_logs', [
     {
       id: f.auditLogs.al1,
       organization_id: f.organizationId,
@@ -545,7 +539,7 @@ async function seedOrganization(
   ]);
 
   // Token hash only — never a plaintext token, even in a fixture.
-  await upsert(service, 'organization_invitations', [
+  await setup.upsert('organization_invitations', [
     {
       id: f.invitations.inv1,
       organization_id: f.organizationId,
@@ -585,20 +579,52 @@ async function seedOrganization(
   };
 }
 
-/** Walks a ticket along legal edges with the service-role client. Fixture setup only. */
-async function advanceTicket(
-  service: SupabaseClient,
+/** The linear chain from §4. `cancelled` is reachable from any non-terminal state. */
+const TICKET_CHAIN = ['open', 'assigned', 'in_progress', 'awaiting_approval', 'completed'];
+
+/**
+ * Walks a ticket FORWARD to `target` along legal edges only, from wherever it currently
+ * is. Idempotent: a ticket already at the target is left alone.
+ *
+ * Seeding has to work this way rather than by upserting a status. On a second run the
+ * row already sits at `in_progress`, and writing `open` over it is an illegal
+ * transition the trigger correctly rejects — so a status upsert makes the fixture
+ * un-reseedable against a live database.
+ *
+ * Fixture setup, through the privileged client. The state machine itself is asserted in
+ * tests/rls/state-machine.test.ts on throwaway tickets; arriving at a seeded starting
+ * state must not depend on the policy under test.
+ */
+async function ensureTicketStatus(
+  setup: SetupClient,
   ticketId: string,
-  path: readonly string[],
+  target: string,
   providerId: string | null,
 ): Promise<void> {
-  for (const status of path) {
-    const patch: Record<string, unknown> = { status };
-    if (status === 'assigned' && providerId) patch.assigned_provider_id = providerId;
-    const { error } = await service.from('maintenance_tickets').update(patch).eq('id', ticketId);
+  const { data } = await setup.select('maintenance_tickets', {
+    columns: 'status',
+    eq: { id: ticketId },
+  });
+  const current = String((data ?? [])[0]?.status ?? 'open');
+  if (current === target) return;
+
+  const from = TICKET_CHAIN.indexOf(current);
+  const to = TICKET_CHAIN.indexOf(target);
+  if (from === -1 || to === -1 || to < from) {
+    throw new Error(
+      `Cannot seed ticket ${ticketId} from "${current}" to "${target}": there is no ` +
+        'forward path, and the suite will not walk a ticket backwards because no such ' +
+        'edge exists. Reset the database with `node scripts/reset-db.mjs`.',
+    );
+  }
+
+  for (const next of TICKET_CHAIN.slice(from + 1, to + 1)) {
+    const patch: Row = { status: next };
+    if (next === 'assigned' && providerId) patch.assigned_provider_id = providerId;
+    const { error } = await setup.update('maintenance_tickets', patch, { id: ticketId });
     if (error) {
       throw new Error(
-        `Fixture seeding failed walking ticket ${ticketId} to ${status}: ${error.message}. ` +
+        `Fixture seeding failed walking ticket ${ticketId} to ${next}: ${error.message}. ` +
           'The seeded path follows only legal edges, so this means the transition trigger ' +
           'disagrees with the §4 state machine.',
       );
@@ -606,45 +632,22 @@ async function advanceTicket(
   }
 }
 
-/**
- * Seeds a small PDF-shaped object per organization into the private bucket so the
- * storage suite has something real to request a signed URL for.
- */
-export async function seedStorageObjects(
-  service: SupabaseClient,
-  bucket: string,
-  fixture: Fixture,
-): Promise<{ seeded: boolean; reason?: string }> {
-  const body = new Uint8Array([
-    0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34, 0x0a, 0x25, 0xc2, 0xa5, 0xc2, 0xb1, 0xc3, 0xab,
-    0x0a, 0x25, 0x25, 0x45, 0x4f, 0x46, 0x0a,
-  ]);
-  for (const org of ORG_KEYS) {
-    for (const path of Object.values(fixture[org].objects)) {
-      const { error } = await service.storage.from(bucket).upload(path, body, {
-        contentType: 'application/pdf',
-        upsert: true,
-      });
-      if (error) return { seeded: false, reason: `${path}: ${error.message}` };
-    }
-  }
-  return { seeded: true };
+/** Every seeded object path, in both organizations. The storage suite asserts on these. */
+export function fixtureObjectPaths(fixture: Fixture): string[] {
+  return ORG_KEYS.flatMap((key) => Object.values(fixture[key].objects));
 }
 
 /** Builds the whole world. Idempotent. */
 export async function seedFixture(
+  setup: SetupClient,
   factory: JwtFactoryModule,
-  creds: StackCredentials,
+  userIdByPrincipal: Map<string, string>,
 ): Promise<Fixture> {
-  const service = factory.createServiceRoleClient(creds);
-  const users = await factory.ensureAuthUsers(creds);
-  const userIdByPrincipal = new Map([...users.values()].map((u) => [u.key, u.userId]));
-
-  const capabilities = { documentsHasTicketId: await detectDocumentsTicketId(service) };
+  const capabilities = { documentsHasTicketId: await detectDocumentsTicketId(setup) };
 
   const seeded = {} as Record<OrgKey, OrgFixture>;
   for (const org of ORG_KEYS) {
-    seeded[org] = await seedOrganization(service, factory, org, userIdByPrincipal, capabilities);
+    seeded[org] = await seedOrganization(setup, factory, org, userIdByPrincipal, capabilities);
   }
 
   return { A: seeded.A, B: seeded.B, capabilities };

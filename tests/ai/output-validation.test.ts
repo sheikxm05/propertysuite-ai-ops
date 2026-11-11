@@ -10,10 +10,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { AiOutputInvalidError, AiUnsupportedError } from '@/services/ai/errors';
-import {
-  createClassificationProvider,
-  evaluateReply,
-} from '@/services/ai/providers/classification-provider';
+import { createClassificationProvider, evaluateReply } from '@/services/ai/providers/provider';
 
 import { scriptedTransport, validClassificationJson } from './_support/scripted-transport';
 

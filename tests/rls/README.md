@@ -4,6 +4,69 @@ Lane `w0-l6`. This suite is the project's central claim, in executable form:
 **organization A provably cannot reach organization B's data, and a role inside an
 organization cannot exceed its grant.** Wave 1 is gated on it.
 
+## Two execution drivers
+
+The suite asserts RLS behaviour, and RLS lives in Postgres. How a statement reaches
+Postgres is a transport detail, so there are two transports and the tests cannot tell
+which one they are running on.
+
+| | `supabase` (default) | `pg` |
+| --- | --- | --- |
+| Transport | PostgREST over HTTPS | `psql` straight to Postgres |
+| Identity | a real Supabase Auth JWT per principal | `set local role authenticated` plus `request.jwt.claims` |
+| Needs | anon + service-role keys, a reachable API | a connection string, nothing else |
+| Fixtures written by | the service-role client | the table owner |
+| Per-case transaction | no (PostgREST cannot roll back) | yes — every operation is rolled back |
+| Storage | HTTP: signed URLs, expiry, MIME | policy level: `storage.objects` RLS |
+
+`auth.uid()` reads `request.jwt.claims->>'sub'`, so the `pg` driver exercises the same
+code path a real JWT takes — it sets the same claim PostgREST would. What differs is
+only who carries the claim there.
+
+```bash
+# default: supabase-js when the stack keys are present
+npm run test:rls
+
+# direct Postgres, for a database reachable only by connection string
+PS_RLS_DRIVER=pg npm run test:rls
+```
+
+Selection is automatic when `PS_RLS_DRIVER` is unset: supabase-js if the anon and
+service-role keys resolve, otherwise `pg`. If neither can run, the suite fails with both
+reasons printed — it never skips.
+
+### Why the `pg` driver wraps and rolls back every operation
+
+It runs against a real cloud project, not a disposable container, so no assertion may
+leave a row behind. Each operation is one transaction:
+
+```sql
+begin;
+set local role authenticated;                      -- RLS now applies to us
+select set_config('request.jwt.claims', '{"sub":"…","role":"authenticated"}', true);
+<the statement, errors caught in a PL/pgSQL handler>
+rollback;                                          -- the database is left as found
+```
+
+Two consequences worth knowing before reading the tests:
+
+- An **allowed** write is proven by its own `RETURNING` clause, inside the transaction,
+  not by a follow-up read. A follow-up read would see the pre-write value, because the
+  write was deliberately undone. What is asserted is that the write was *accepted*.
+- The whole batch is sent as ONE round trip, joined with psql's `\;`. On the live
+  pooler a round trip costs ~0.3 s and a process spawn ~3.2 s, so the obvious shape —
+  one `psql -c` per assertion — would have taken over half an hour and produced a gate
+  nobody would run.
+
+Errors are caught server-side in a PL/pgSQL exception handler and returned as part of
+the result payload, rather than scraped from stderr. psql writes errors to a separate
+pipe with no ordering guarantee against stdout, so correlating "which of 1,600
+operations produced this error" would be guesswork — and this suite checks exact
+SQLSTATEs.
+
+`pg` is not in the frozen dependency list (§5.1) and no lane may install one, which is
+why the transport is the `psql` binary rather than a Node client.
+
 ## Running it
 
 The suite needs a real Postgres with RLS active. There is no mock mode and there must
@@ -12,7 +75,7 @@ construction.
 
 ```bash
 node scripts/supabase-local.mjs doctor   # preflight: Docker, CLI, config.toml, migrations
-npm run db:start                         # start the stack and apply migrations
+npm run db:start                         # start the local stack and apply migrations
 npm run test:rls                         # the suite
 ```
 
@@ -43,32 +106,67 @@ node scripts/supabase-local.mjs env      # export lines for .env.local
 ## Rules this suite holds itself to
 
 1. **Every assertion runs as a real authenticated principal.** Ten of them: five roles
-   times two organizations, signed in through Supabase Auth, holding real JWTs. Two
-   extra secondary tenants exist so "a tenant cannot read another tenant's row" is
-   asserted from a second real session rather than inferred from the first one's result.
-2. **The service-role client never satisfies an assertion.** It seeds fixtures. It
-   bypasses RLS, so an assertion made through it would pass against a database with no
-   policies at all. The one deliberate exception is adversarial: proving that the
-   `maintenance_activities` immutability trigger binds the service role too, which is a
-   claim about the trigger rather than about access control.
-3. **A denial must be denied for the right reason.** PostgREST returns an error for a
-   missing column, a null violation and an RLS refusal alike. The helpers require the
-   SQLSTATE to be an authorization refusal and fail loudly on anything else, naming the
-   code they got. A test that accepts "some error happened" proves nothing while reading
-   as if it proved everything.
-4. **A filtered-out row is not an error.** An UPDATE or DELETE that RLS makes invisible
-   returns HTTP 200 with zero rows. The write helpers assert zero affected rows _and_
+   times two organizations. Two extra secondary tenants exist so "a tenant cannot read
+   another tenant's row" is asserted from a second real session rather than inferred
+   from the first one's result.
+2. **The privileged client never satisfies an assertion.** Service-role over HTTP, table
+   owner over psql; both bypass RLS, so an assertion made through either would pass
+   against a database with no policies at all. They seed the world and answer "did that
+   write land?", never "was the caller allowed to?". The one deliberate exception is
+   adversarial: proving the `maintenance_activities` immutability trigger binds the
+   privileged client too, which is a claim about the trigger rather than about access
+   control.
+3. **A denial must be denied for the right reason.** A missing column, a null violation
+   and an RLS refusal all produce "an error". The helpers require the SQLSTATE to be an
+   authorization refusal and fail loudly on anything else, naming the code they got. A
+   test that accepts "some error happened" proves nothing while reading as if it proved
+   everything.
+4. **A rejection must also be rejected for the right reason.** The mirror image, and the
+   one that actually shipped: a recursive policy made every ticket INSERT fail with
+   `42P17`, and the cross-role case only asserted that the tenant's insert *succeeds*.
+   `ticket-creation.test.ts` now checks that code explicitly.
+5. **A filtered-out row is not an error.** An UPDATE or DELETE that RLS makes invisible
+   returns zero rows and no error. The write helpers assert zero affected rows *and*
    confirm through a second authenticated principal that the value did not change.
-5. **Positive assertions are mandatory.** Where the matrix grants access, the suite
+6. **Positive assertions are mandatory.** Where the matrix grants access, the suite
    proves the access works. Otherwise a broken migration that locks everyone out looks
    like perfect security.
-6. **Tables come from the migrations, not from judgement.** `tests/_harness/tables.ts`
+7. **Tables come from the migrations, not from judgement.** `tests/_harness/tables.ts`
    parses `supabase/migrations/*.sql`; `tests/_harness/harness.test.ts` fails if any
    table carrying `organization_id` is missing from the registry, so a table added in a
-   later sprint cannot slip through untested.
-7. **The two organizations look identical.** Same property names, same unit numbers,
+   later sprint cannot slip through untested. That is how `organization_invitations`
+   (amendment A4) arrived in the suite.
+8. **The two organizations look identical.** Same property names, same unit numbers,
    same tenant names, same ticket titles, same contract numbers. A leak cannot be
    spotted by eye, so every assertion compares identifiers.
+9. **Nothing is skipped silently.** A case outside the active driver's reach calls
+   `ctx.skip()` and shows as skipped. A storage assertion that quietly passed would be
+   indistinguishable from one proving the bucket is wide open.
+
+## Seeding is idempotent, and a live database stays as it was found
+
+Every fixture id is derived from a stable key, so seeding is an upsert. Two details are
+load-bearing and were both learned by running it twice:
+
+- **`maintenance_activities` is inserted with `on conflict do nothing`.** An upsert that
+  updated an existing activity row would be refused by the immutability trigger — the
+  guarantee `negative-writes.test.ts` asserts. Append-only means append-only, including
+  for the harness.
+- **Ticket `status` is not part of the upsert payload.** New rows take the column default
+  (`open`, per §4) and `ensureTicketStatus` walks forward from wherever the row actually
+  is. Writing `open` over a ticket already at `in_progress` is an illegal transition,
+  correctly rejected, which would make the fixture un-reseedable.
+
+Anything that genuinely mutates uses a throwaway ticket from `tests/_harness/scratch.ts`,
+and the state-machine suite deletes those in `afterAll`. Scratch tickets are safe to
+delete precisely because they have no activity rows: nothing auto-writes one, and an
+activity row could not be removed afterwards.
+
+The two fixture organizations themselves persist. That is not an oversight — their
+activity rows are append-only by design, so a ticket that owns one can never be deleted
+either. A live project therefore keeps the two fixture organizations once the suite has
+run against it, and `fixtureObjectPaths` plus the deterministic ids make a re-run reuse
+them rather than accumulate more.
 
 ## The coverage gate
 
@@ -110,6 +208,34 @@ documents       D1 -> P1 + TC1    D2 -> P2 + TC3    evidence -> K1
 Every row id is derived from a stable key, so seeding is an upsert and re-running the
 suite without a database reset is idempotent. Anything that genuinely mutates state uses
 a throwaway ticket from `tests/_harness/scratch.ts` instead of the shared fixture.
+
+## Open finding: a provider can read tenant email and phone
+
+`role-scoping.test.ts > sees the tenant's name but not their email or phone` **fails
+against the live database**, and the failure is correct.
+
+The §4 matrix grants `service_provider` "R name only, via assignment" on `tenants`.
+`tenants_select_provider_assigned` implements the *row* half of that correctly — a
+provider reaches only the tenant of a ticket assigned to them — but there is no column
+restriction, and Supabase's default grants give `authenticated` column-level SELECT on
+every column:
+
+```
+information_schema.column_privileges, grantee 'authenticated', table 'tenants'
+  SELECT:full_name, SELECT:email, SELECT:phone   <- all three
+
+as the provider principal:
+  select full_name, email, phone from public.tenants;
+  Omar Haddad | omar.haddad@resident.test | +971500000101
+```
+
+RLS filters rows, not columns, so no policy can close this. It needs a column-level
+grant, a name-only view, or a security-definer accessor — a decision for the lane that
+owns `0002`, not for this one. Reported as a defect; the assertion stays as written.
+
+Scope, stated plainly: a contractor assigned one job learns that tenant's direct contact
+details. It is not a cross-organization leak and not a cross-tenant leak — the row is
+one the provider is entitled to see — but it is more of that row than §4 grants.
 
 ## Spec amendments this suite tracks
 

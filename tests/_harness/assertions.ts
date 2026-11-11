@@ -21,7 +21,7 @@
  */
 
 import { expect } from 'vitest';
-import type { PostgrestError, SupabaseClient } from '@supabase/supabase-js';
+import type { DbError, Principal, Row } from './driver';
 import { recordCoverage, type Dimension } from './policy-coverage';
 
 /** SQLSTATEs that mean "authorization refused", per amendment A2 in §5.8. */
@@ -52,10 +52,10 @@ function pass(tag: CoverageTag, outcome: 'allow' | 'deny'): void {
   });
 }
 
-const describeError = (error: PostgrestError | null) =>
+const describeError = (error: DbError | null) =>
   error ? `${error.code ?? '-'}: ${error.message}` : 'no error';
 
-export function isAuthorizationRefusal(error: PostgrestError | null): boolean {
+export function isAuthorizationRefusal(error: DbError | null): boolean {
   if (!error) return false;
   return RLS_DENIAL_CODES.has(error.code ?? '') || PERMISSION_MESSAGE.test(error.message ?? '');
 }
@@ -64,13 +64,13 @@ export function isAuthorizationRefusal(error: PostgrestError | null): boolean {
 
 /** The row must be invisible: zero rows, and not an unexpected error. */
 export async function expectSelectDenied(
-  client: SupabaseClient,
+  client: Principal,
   table: string,
   rowId: string,
   tag: CoverageTag,
   columns = 'id',
 ): Promise<void> {
-  const { data, error } = await client.from(table).select(columns).eq('id', rowId);
+  const { data, error } = await client.select(table, { columns, eq: { id: rowId } });
 
   if (error) {
     // A revoked grant is a legitimate denial. Anything else is a broken test.
@@ -88,13 +88,13 @@ export async function expectSelectDenied(
 
 /** The row must be visible. */
 export async function expectSelectAllowed(
-  client: SupabaseClient,
+  client: Principal,
   table: string,
   rowId: string,
   tag: CoverageTag,
   columns = 'id',
 ): Promise<void> {
-  const { data, error } = await client.from(table).select(columns).eq('id', rowId);
+  const { data, error } = await client.select(table, { columns, eq: { id: rowId } });
   expect(error, `${table}: expected to read ${rowId}, got ${describeError(error)}`).toBeNull();
   expect(
     (data ?? []).length,
@@ -105,12 +105,12 @@ export async function expectSelectAllowed(
 
 /** Nothing at all may be visible in this table for this caller. */
 export async function expectNothingVisible(
-  client: SupabaseClient,
+  client: Principal,
   table: string,
   tag: CoverageTag,
   columns = 'id',
 ): Promise<void> {
-  const { data, error } = await client.from(table).select(columns).limit(5);
+  const { data, error } = await client.select(table, { columns, limit: 5 });
   if (error) {
     expect(
       isAuthorizationRefusal(error),
@@ -125,12 +125,12 @@ export async function expectNothingVisible(
 /* ------------------------------------------------------------------ insert -- */
 
 export async function expectInsertDenied(
-  client: SupabaseClient,
+  client: Principal,
   table: string,
-  row: Record<string, unknown>,
+  row: Row,
   tag: CoverageTag,
 ): Promise<void> {
-  const { error } = await client.from(table).insert(row).select('id');
+  const { error } = await client.insert(table, row);
 
   expect(error, `${table}: INSERT succeeded where the matrix grants no INSERT`).not.toBeNull();
   expect(
@@ -143,12 +143,12 @@ export async function expectInsertDenied(
 }
 
 export async function expectInsertAllowed(
-  client: SupabaseClient,
+  client: Principal,
   table: string,
-  row: Record<string, unknown>,
+  row: Row,
   tag: CoverageTag,
 ): Promise<void> {
-  const { data, error } = await client.from(table).insert(row).select('id');
+  const { data, error } = await client.insert(table, row);
   expect(
     error,
     `${table}: expected the INSERT to be permitted, got ${describeError(error)}`,
@@ -164,12 +164,12 @@ export async function expectInsertAllowed(
  * correct answers to "these two rows belong to different organizations".
  */
 export async function expectInsertRejected(
-  client: SupabaseClient,
+  client: Principal,
   table: string,
-  row: Record<string, unknown>,
+  row: Row,
   tag: CoverageTag,
 ): Promise<void> {
-  const { error } = await client.from(table).insert(row).select('id');
+  const { error } = await client.insert(table, row);
   expect(error, `${table}: a cross-organization INSERT was accepted`).not.toBeNull();
   const code = error?.code ?? '';
   const acceptable =
@@ -185,22 +185,22 @@ export async function expectInsertRejected(
 
 export interface WriteDenialOptions {
   /** A principal entitled to read the row, used to confirm nothing changed. */
-  verifyWith?: SupabaseClient;
+  verifyWith?: Principal;
   /** The column the patch targets, read back through `verifyWith`. */
   verifyColumn?: string;
 }
 
 export async function expectUpdateDenied(
-  client: SupabaseClient,
+  client: Principal,
   table: string,
   rowId: string,
-  patch: Record<string, unknown>,
+  patch: Row,
   tag: CoverageTag,
   options: WriteDenialOptions = {},
 ): Promise<void> {
   const before = await readColumn(options, table, rowId);
 
-  const { data, error } = await client.from(table).update(patch).eq('id', rowId).select('id');
+  const { data, error } = await client.update(table, patch, { id: rowId });
 
   if (error) {
     expect(
@@ -225,13 +225,14 @@ export async function expectUpdateDenied(
 }
 
 export async function expectUpdateAllowed(
-  client: SupabaseClient,
+  client: Principal,
   table: string,
   rowId: string,
-  patch: Record<string, unknown>,
+  patch: Row,
   tag: CoverageTag,
-): Promise<void> {
-  const { data, error } = await client.from(table).update(patch).eq('id', rowId).select('id');
+  returning = 'id',
+): Promise<Row[]> {
+  const { data, error } = await client.update(table, patch, { id: rowId }, returning);
   expect(
     error,
     `${table}: expected the UPDATE to be permitted, got ${describeError(error)}`,
@@ -241,6 +242,7 @@ export async function expectUpdateAllowed(
     `${table}: UPDATE affected no rows, so the policy hid a row the matrix grants`,
   ).toBe(1);
   pass(tag, 'allow');
+  return data ?? [];
 }
 
 /* ------------------------------------------------------------------ delete -- */
@@ -250,13 +252,13 @@ export async function expectUpdateAllowed(
  * `expectDeleteAllowed`, deliberately — there is no case where one would be correct.
  */
 export async function expectDeleteDenied(
-  client: SupabaseClient,
+  client: Principal,
   table: string,
   rowId: string,
   tag: CoverageTag,
   options: WriteDenialOptions = {},
 ): Promise<void> {
-  const { data, error } = await client.from(table).delete().eq('id', rowId).select('id');
+  const { data, error } = await client.remove(table, { id: rowId });
 
   if (error) {
     expect(
@@ -274,24 +276,41 @@ export async function expectDeleteDenied(
   // The row must still be there. Checked through an authenticated reader when one is
   // supplied, because that is an assertion RLS itself has to permit.
   if (options.verifyWith) {
-    const { data: still } = await options.verifyWith.from(table).select('id').eq('id', rowId);
+    const { data: still } = await options.verifyWith.select(table, { eq: { id: rowId } });
     expect((still ?? []).length, `${table}: row ${rowId} was actually deleted`).toBe(1);
   }
   pass(tag, 'deny');
 }
 
+/**
+ * Reads one column back through a principal entitled to see the row.
+ *
+ * Returns `undefined` when there is nothing to verify with, and THROWS when the read
+ * itself fails. Swallowing that error was a real defect: a verification read that timed
+ * out returned `null`, the post-write read succeeded, and the mismatch was reported as
+ * "the row changed despite the UPDATE being reported as denied" — a fabricated security
+ * finding produced by lock contention.
+ */
 async function readColumn(
   options: WriteDenialOptions,
   table: string,
   rowId: string,
 ): Promise<unknown> {
   if (!options.verifyWith || !options.verifyColumn) return undefined;
-  const { data } = await options.verifyWith
-    .from(table)
-    .select(options.verifyColumn)
-    .eq('id', rowId)
-    .maybeSingle();
-  return data ? (data as unknown as Record<string, unknown>)[options.verifyColumn] : null;
+  const { data, error } = await options.verifyWith.select(table, {
+    columns: options.verifyColumn,
+    eq: { id: rowId },
+  });
+  if (error) {
+    throw new Error(
+      `${table}: the verification read of ${options.verifyColumn} on ${rowId} failed ` +
+        `(${error.code ?? '-'}: ${error.message}). This is the harness being unable to ` +
+        'check the row, not an access-control result — fix the verifier, do not read a ' +
+        'security conclusion into it.',
+    );
+  }
+  const row = (data ?? [])[0];
+  return row ? row[options.verifyColumn] : null;
 }
 
 /** Records a passing assertion that is not shaped as a single table operation. */

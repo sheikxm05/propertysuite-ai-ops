@@ -38,3 +38,6 @@ yarn-error.log*
 
 # Project blueprint archive — superseded by docs/
 propertysuite-ai-operations-blueprint.zip
+
+.vercel
+.env*

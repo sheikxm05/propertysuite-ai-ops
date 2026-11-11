@@ -33,7 +33,7 @@ import {
   TICKET_PRIORITIES,
   resolvePriority,
 } from '@shared/index';
-import { createClassificationProvider } from '@/services/ai/providers/classification-provider';
+import { createClassificationProvider } from '@/services/ai/providers/provider';
 
 import { scriptedTransport, validClassificationJson } from './_support/scripted-transport';
 
@@ -120,12 +120,14 @@ describe('a hostile reply has nowhere to put a privileged instruction', () => {
     }
   });
 
-  it('exposes one method and one id, so there is no second entry point', () => {
+  it('exposes exactly two methods and an id, so there is no third entry point', () => {
     const adapter = createClassificationProvider({
       transport: scriptedTransport([{ text: validClassificationJson() }]),
       model: 'm',
     });
-    expect(Object.keys(adapter).sort()).toEqual(['classify', 'id']);
+    // The whole surface, enumerated. No mutate, no commit, no assign, no verify — and a
+    // method added without updating this list fails here rather than in review.
+    expect(Object.keys(adapter).sort()).toEqual(['classify', 'extractDocumentFields', 'id']);
   });
 });
 
@@ -275,12 +277,43 @@ describe('the lane’s source has no privileged write path', () => {
 
   it('gives the adapter no Supabase client at all', () => {
     const adapterFiles = LANE_FILES.filter(
-      (file) => file.path.startsWith('services/ai/providers/') || file.path.endsWith('fence.ts'),
+      (file) =>
+        file.path.startsWith('services/ai/providers/') ||
+        file.path.startsWith('services/ai/documents/') ||
+        file.path.startsWith('services/ai/prompts/') ||
+        file.path.endsWith('fence.ts'),
     );
-    expect(adapterFiles.length).toBeGreaterThan(3);
+    expect(adapterFiles.length).toBeGreaterThan(5);
     for (const file of adapterFiles) {
-      expect(code(file.text)).not.toMatch(/supabase/i);
+      expect(code(file.text), file.path).not.toMatch(/supabase/i);
     }
+  });
+
+  it('never lowers requires_human_review anywhere in the lane', () => {
+    // The field is server-owned. `provider.ts` sets it to `true` unconditionally, and no
+    // file may set it any other way — including a future "pass it through if the model
+    // seems confident" shortcut, which is what this assertion exists to refuse.
+    const offenders = LANE_FILES.filter((file) =>
+      // `false`, or any identifier/expression that is not the literal `true`.
+      /requires_human_review\s*:\s*(?!true\b)(false\b|[a-zA-Z_$][\w$]*)/.test(code(file.text)),
+    );
+    expect(offenders.map((file) => file.path)).toEqual([]);
+  });
+
+  it('forces requires_human_review on, in the one place that decides it', () => {
+    const provider = LANE_FILES.find((file) => file.path === 'services/ai/providers/provider.ts');
+    expect(provider).toBeDefined();
+    const text = code(provider?.text ?? '');
+    expect(text).toContain('requires_human_review: true');
+    // And the model's own claim is surfaced separately rather than silently discarded.
+    expect(text).toContain('modelRequiresHumanReview');
+    expect(text).toContain('reviewFlagOverridden');
+  });
+
+  it('keeps one fence in the lane, with no second implementation', () => {
+    // `services/extraction/fence.ts` (lane w1-l6) delegates here rather than forking.
+    const fenceFiles = LANE_FILES.filter((file) => /FENCE_BEGIN\s*=/.test(code(file.text)));
+    expect(fenceFiles.map((file) => file.path)).toEqual(['services/ai/fence.ts']);
   });
 
   it('never lets the AI layer call the confirmation endpoint', () => {

@@ -7,11 +7,16 @@
  */
 
 export * from './assertions';
+export * from './driver';
+export * from './driver-pg';
+export * from './driver-supabase';
 export * from './fixtures';
 export * from './jwt-factory';
 export * from './policy-coverage';
 export * from './policy-matrix';
 export * from './probes';
+export * from './psql';
 export * from './scratch';
+export * from './sql';
 export * from './tables';
 export * from './world';

@@ -17,7 +17,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { createClassificationProvider } from '@/services/ai/providers/classification-provider';
+import { createClassificationProvider } from '@/services/ai/providers/provider';
 import {
   ACTIVE_MAINTENANCE_CLASSIFICATION_PROMPT,
   promptFingerprint,
@@ -164,9 +164,11 @@ describe('the adapter is stateless with respect to the transcript', () => {
 
   it('takes no conversation, history or stored-turn argument at all', () => {
     const { provider: adapter } = provider([validClassificationJson()]);
-    // One method and one id. Nothing through which a stored row could be replayed.
-    expect(Object.keys(adapter).sort()).toEqual(['classify', 'id']);
+    // Two methods and an id. Nothing through which a stored row could be replayed, and
+    // neither method takes more than an input and a call-options object.
+    expect(Object.keys(adapter).sort()).toEqual(['classify', 'extractDocumentFields', 'id']);
     expect(adapter.classify.length).toBeLessThanOrEqual(2);
+    expect(adapter.extractDocumentFields.length).toBeLessThanOrEqual(2);
   });
 });
 

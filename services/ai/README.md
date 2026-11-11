@@ -2,6 +2,16 @@
 
 Lane **w1-l5**. Provider-neutral AI layer plus the two `/api/v1/ai/*` routes.
 
+Two model-facing capabilities, one adapter:
+
+| Method | For | Validated against |
+| --- | --- | --- |
+| `classify` | maintenance intake (this lane's routes) | `ClassificationSchema` |
+| `extractDocumentFields` | document extraction (lane w1-l6's pipeline) | `DocumentExtractionSchema` |
+
+Neither takes a system prompt, a pre-built prompt, a conversation history or a stored turn.
+Read `providers/types.ts` and the argument is simply not there.
+
 ## The one rule
 
 **The model drafts, a human commits.** Nothing exported from here mutates anything.
@@ -23,10 +33,11 @@ Lane **w1-l5**. Provider-neutral AI layer plus the two `/api/v1/ai/*` routes.
 | --- | --- |
 | `providers/types.ts` | The frozen adapter interface. **No system-prompt parameter.** |
 | `providers/transport.ts` | The one-model-call seam. Replaced offline by the eval set. |
-| `providers/classification-provider.ts` | Provider-neutral core: prompt, fence, validate, one retry. |
+| `providers/provider.ts` | Provider-neutral core: prompt, fence, validate, one retry, review-flag override. |
 | `providers/anthropic.ts` | The only file importing `@anthropic-ai/sdk`. |
 | `providers/index.ts` | `getAiProvider()` — reads `AI_PROVIDER` and `AI_MODEL`. |
-| `prompts/*.v1.ts`, `prompts/registry.ts` | The versioned, frozen prompt and its registry. |
+| `prompts/*.v1.ts`, `prompts/registry.ts` | The two versioned, frozen prompts and their registry. |
+| `documents/extractor-binding.ts` | What lane w1-l6 registers. Accepts their prompt and ignores it. |
 | `fence.ts` | Untrusted-content fencing. The adapter's only input path. |
 | `maintenance/intake.ts` | Unit resolution and the trusted priority facts. |
 | `maintenance/draft.ts` | Clarification overlay and editable suggestions. Client-safe. |
@@ -98,3 +109,43 @@ in an audit row.
 **`ANTHROPIC_API_KEY` is blank in this checkout, so no live call has ever been made.** The
 adapter is built and the eval set runs offline against synthesised fixtures; the live path is
 unverified. See `evals/README.md`.
+
+## Document field extraction
+
+`extractDocumentFields` serves lane w1-l6's extraction pipeline. A PDF is the most hostile
+input in this application - whoever uploads a tenancy contract writes every character the
+model will read - so it carries one guarantee the maintenance path does not need:
+
+**`requires_human_review` is server-owned.** Whatever the model returns, the stored value is
+`true`. The model's own claim comes back separately as `modelRequiresHumanReview`, and
+`reviewFlagOverridden` says when it tried to lower it - which is exactly what a successful
+injection inside a PDF looks like, and is worth logging. The field is set unconditionally
+rather than "corrected if wrong", because an `if` there is one refactor away from being
+removed. A server-authored confidence note records the override where the human verifier can
+see it.
+
+The prompt is `prompts/document-extraction.v1.ts`, transcribed from
+`docs/ai-prompts/document-extraction.md`. `tests/ai/document-prompt-contract.test.ts` reads
+that document off disk and compares, so a reworded contract fails the build rather than
+quietly changing what the model is told - including the two rules most easily lost in a
+reword: "use null for missing or ambiguous fields" and "if multiple possible values exist,
+return null and explain the ambiguity in `confidence_notes`".
+
+Document text is fenced by `fence.ts` under the `document_text` label - the **same** fence.
+Lane w1-l6 deleted its parallel implementation and delegates here, so there is one fence in
+the repository, audited once. `tests/ai/no-privileged-action.test.ts` asserts that
+`FENCE_BEGIN` is defined in exactly one file.
+
+### Wiring it
+
+```ts
+import { createDocumentFieldExtractorBinding } from '@/services/ai';
+registerDocumentFieldExtractor(createDocumentFieldExtractorBinding());
+```
+
+`documents/extractor-binding.ts` accepts w1-l6's request shape and **ignores its `prompt`
+field**, using this lane's frozen instruction instead - a caller-supplied prompt is a
+caller-supplied system role, which is the one thing the adapter is built to make impossible.
+It therefore needs `documentText` on the request, and says so loudly if it is missing. `id`
+encodes the prompt version actually used, so w1-l6's envelope attributes the fields to the
+instruction that produced them.

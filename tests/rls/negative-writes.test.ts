@@ -135,29 +135,79 @@ describe('maintenance_activities is immutable', () => {
   it('every role is refused, and the row is byte-for-byte unchanged afterwards', async () => {
     const f = orgFixture(world, 'A');
     const reader = clientFor(world, 'A', 'organization_admin');
-    const { data: before } = await reader
-      .from('maintenance_activities')
-      .select('id,activity_type,description,created_at')
-      .eq('id', f.activities.a1)
-      .maybeSingle();
+    const { data: before } = await reader.select('maintenance_activities', {
+      columns: 'id,activity_type,description,created_at',
+      eq: { id: f.activities.a1 },
+    });
 
     for (const role of ALL_ROLES) {
       const client = clientFor(world, 'A', role);
-      await client
-        .from('maintenance_activities')
-        .update({ description: `rewritten by ${role}` })
-        .eq('id', f.activities.a1);
-      await client.from('maintenance_activities').delete().eq('id', f.activities.a1);
+      await client.update(
+        'maintenance_activities',
+        { description: `rewritten by ${role}` },
+        { id: f.activities.a1 },
+      );
+      await client.remove('maintenance_activities', { id: f.activities.a1 });
     }
 
-    const { data: after } = await reader
-      .from('maintenance_activities')
-      .select('id,activity_type,description,created_at')
-      .eq('id', f.activities.a1)
-      .maybeSingle();
+    const { data: after } = await reader.select('maintenance_activities', {
+      columns: 'id,activity_type,description,created_at',
+      eq: { id: f.activities.a1 },
+    });
 
     expect(after, 'the activity row was altered or removed').toEqual(before);
     recordPass({ dimension: 'integrity', label: 'maintenance_activities immutable to all roles' });
+  });
+
+  it('TRUNCATE is refused, even though the privilege was never revoked', async (ctx) => {
+    // Found by running the migrations against a real instance, not by reading them.
+    //
+    // 0002 revoked UPDATE and DELETE on maintenance_activities from `authenticated`,
+    // which is what finding 6 asked for. It did not revoke TRUNCATE — and Supabase's
+    // default grants hand `authenticated` every privilege on a new table, so the
+    // privilege is still there:
+    //
+    //   has_table_privilege('authenticated','public.maintenance_activities','TRUNCATE')
+    //     -> true
+    //   has_table_privilege('authenticated','public.maintenance_activities','UPDATE')
+    //     -> false
+    //
+    // TRUNCATE also bypasses RLS entirely: policies filter rows, and TRUNCATE does not
+    // look at rows. So no policy could have stopped it. The only thing standing between
+    // a client and the entire activity history of the organization is 0003's
+    // `maintenance_activities_block_truncate` trigger, which fires on TRUNCATE and
+    // raises. It fails closed, which is why this is a test rather than a defect — but
+    // it fails closed on a trigger rather than on a privilege, so it is asserted
+    // explicitly and by name.
+    //
+    // PostgREST has no TRUNCATE verb, so this is only reachable on the pg driver; the
+    // supabase driver reports it unsupported and the case is skipped rather than
+    // silently passed.
+    const f = orgFixture(world, 'A');
+    const client = clientFor(world, 'A', 'organization_admin');
+
+    const attempt = await client.truncate('maintenance_activities');
+    if (attempt.unsupported) {
+      ctx.skip();
+      return;
+    }
+
+    expect(
+      attempt.error,
+      'TRUNCATE on maintenance_activities succeeded. The immutable activity history — ' +
+        'the evidence of every state change in the system — was erased wholesale by an ' +
+        'authenticated client. RLS cannot prevent this because TRUNCATE does not ' +
+        'examine rows; only the 0003 trigger can.',
+    ).not.toBeNull();
+
+    // The row is still there, confirmed through an authenticated reader.
+    const { data: still } = await client.select('maintenance_activities', {
+      columns: 'id',
+      eq: { id: f.activities.a1 },
+    });
+    expect((still ?? []).length, 'the activity history is gone after TRUNCATE').toBe(1);
+
+    recordPass({ dimension: 'integrity', label: 'TRUNCATE on activities refused by trigger' });
   });
 
   it('the immutability trigger refuses even the service role', async () => {
@@ -167,22 +217,20 @@ describe('maintenance_activities is immutable', () => {
     // Nothing here asserts an access-control outcome; it asserts the trigger exists.
     const f = orgFixture(world, 'A');
 
-    const update = await world.service
-      .from('maintenance_activities')
-      .update({ description: 'rewritten with the service role' })
-      .eq('id', f.activities.a1)
-      .select('id');
+    const update = await world.setup.update(
+      'maintenance_activities',
+      { description: 'rewritten with the service role' },
+      { id: f.activities.a1 },
+    );
     expect(
       update.error,
       'the service role rewrote immutable history. RLS does not apply to it, so only a ' +
         'trigger can stop this — see finding 6.',
     ).not.toBeNull();
 
-    const remove = await world.service
-      .from('maintenance_activities')
-      .delete()
-      .eq('id', f.activities.a1)
-      .select('id');
+    const remove = await world.setup.remove('maintenance_activities', {
+      id: f.activities.a1,
+    });
     expect(remove.error, 'the service role deleted immutable history').not.toBeNull();
 
     recordPass({ dimension: 'integrity', label: 'activity immutability binds the service role' });
@@ -382,18 +430,15 @@ describe('a client cannot forge provenance', () => {
     const f = orgFixture(world, 'A');
     for (const role of ALL_ROLES) {
       const client = clientFor(world, 'A', role);
-      const insert = await client
-        .from('audit_logs')
-        .insert({
-          id: randomUUID(),
-          organization_id: f.organizationId,
-          actor_profile_id: f.profiles.a_admin ?? '',
-          action: 'forged.action',
-          entity_type: 'property',
-          entity_id: f.properties.p1,
-          metadata: {},
-        })
-        .select('id');
+      const insert = await client.insert('audit_logs', {
+        id: randomUUID(),
+        organization_id: f.organizationId,
+        actor_profile_id: f.profiles.a_admin ?? '',
+        action: 'forged.action',
+        entity_type: 'property',
+        entity_id: f.properties.p1,
+        metadata: {},
+      });
       expect(insert.error, `${role} appended to the audit trail`).not.toBeNull();
       expect(
         isAuthorizationRefusal(insert.error),
@@ -408,24 +453,21 @@ describe('a client cannot forge provenance', () => {
     // skip the activity row and the assignment check in one move.
     const f = orgFixture(world, 'A');
     const client = clientFor(world, 'A', 'property_manager');
-    const attempt = await client
-      .from('maintenance_tickets')
-      .insert({
-        id: randomUUID(),
-        organization_id: f.organizationId,
-        property_id: f.properties.p1,
-        property_unit_id: f.units.p1u1,
-        tenancy_id: f.tenancies.tc1,
-        tenant_id: f.tenants.t1,
-        assigned_provider_id: f.providers.sp1,
-        title: 'Pre-assigned at creation',
-        description: 'Should be refused: tickets start open.',
-        category: 'hvac',
-        priority: 'normal',
-        status: 'assigned',
-        source: 'web',
-      })
-      .select('id');
+    const attempt = await client.insert('maintenance_tickets', {
+      id: randomUUID(),
+      organization_id: f.organizationId,
+      property_id: f.properties.p1,
+      property_unit_id: f.units.p1u1,
+      tenancy_id: f.tenancies.tc1,
+      tenant_id: f.tenants.t1,
+      assigned_provider_id: f.providers.sp1,
+      title: 'Pre-assigned at creation',
+      description: 'Should be refused: tickets start open.',
+      category: 'hvac',
+      priority: 'normal',
+      status: 'assigned',
+      source: 'web',
+    });
 
     expect(attempt.error, 'a ticket was created already in the `assigned` state').not.toBeNull();
     recordPass({ dimension: 'integrity', label: 'tickets must be inserted as open' });
@@ -440,7 +482,7 @@ describe('the job queue is invisible to every client', () => {
       for (const role of ALL_ROLES) {
         const client = clientFor(world, 'A', role);
 
-        const read = await client.from(table).select('id').limit(1);
+        const read = await client.select(table, { columns: 'id', limit: 1 });
         if (read.error) {
           expect(
             isAuthorizationRefusal(read.error),
@@ -450,10 +492,11 @@ describe('the job queue is invisible to every client', () => {
           expect(read.data ?? [], `${table}: readable by ${role}`).toEqual([]);
         }
 
-        const write = await client
-          .from(table)
-          .insert({ id: randomUUID(), type: 'forged', payload: {} })
-          .select('id');
+        const write = await client.insert(
+          table,
+          { id: randomUUID(), type: 'forged', payload: {} },
+          'id',
+        );
         expect(write.error, `${table}: ${role} enqueued a job`).not.toBeNull();
       }
     }
@@ -467,10 +510,10 @@ describe('the invitation token hash is unreadable', () => {
     // `select *` can leak it, and that stays true if what the column holds ever changes.
     const client = clientFor(world, 'A', 'organization_admin');
 
-    const explicit = await client.from('organization_invitations').select('id,token_hash');
+    const explicit = await client.select('organization_invitations', { columns: 'id,token_hash' });
     expect(explicit.error, 'token_hash was selectable by a client').not.toBeNull();
 
-    const star = await client.from('organization_invitations').select('*');
+    const star = await client.select('organization_invitations', { columns: '*' });
     expect(star.error, '`select *` returned the token hash column').not.toBeNull();
 
     recordPass({ dimension: 'integrity', label: 'invitation token_hash not client-readable' });

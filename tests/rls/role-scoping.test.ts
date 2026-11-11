@@ -47,7 +47,7 @@ describe('a tenant cannot reach another tenant', () => {
 
   it('cannot read the other tenant`s name, email or phone by any filter', async () => {
     const client = clientFor(world, 'A', 'tenant');
-    const { data, error } = await client.from('tenants').select('id,full_name,email,phone');
+    const { data, error } = await client.select('tenants', { columns: 'id,full_name,email,phone' });
     expect(error).toBeNull();
 
     const f = orgFixture(world, 'A');
@@ -92,7 +92,7 @@ describe('a tenant cannot reach another tenant', () => {
       ['ai_conversations', f.conversations.c2],
       ['ai_messages', f.messages.m2],
     ] as const) {
-      const { data } = await client.from(table).select('id').eq('id', id);
+      const { data } = await client.select(table, { columns: 'id', eq: { id: id } });
       expect(data ?? [], `${table}: another tenant's row ${id} was visible`).toEqual([]);
     }
     recordPass({
@@ -126,7 +126,7 @@ describe('a tenant cannot reach another tenant', () => {
     // Asserted from a real second session, not inferred from the first one's result.
     const f = orgFixture(world, 'A');
     const client = clientForKey(world, 'a_tenant2');
-    const { data } = await client.from('tenants').select('id');
+    const { data } = await client.select('tenants', { columns: 'id' });
     expect((data ?? []).map((r) => (r as { id: string }).id)).toEqual([f.tenants.t2]);
     recordPass({ dimension: 'integrity', label: 'tenant isolation is symmetric' });
   });
@@ -139,9 +139,9 @@ describe('a service provider sees only assigned work', () => {
     const f = orgFixture(world, 'A');
     const client = clientFor(world, 'A', 'service_provider');
 
-    const { data, error } = await client
-      .from('maintenance_tickets')
-      .select('id,assigned_provider_id');
+    const { data, error } = await client.select('maintenance_tickets', {
+      columns: 'id,assigned_provider_id',
+    });
     expect(error).toBeNull();
 
     const rows = (data ?? []) as { id: string; assigned_provider_id: string | null }[];
@@ -175,20 +175,20 @@ describe('a service provider sees only assigned work', () => {
     const f = orgFixture(world, 'A');
     const client = clientFor(world, 'A', 'service_provider');
 
-    const { data: nameOnly, error: nameError } = await client
-      .from('tenants')
-      .select('id,full_name')
-      .eq('id', f.tenants.t1);
+    const { data: nameOnly, error: nameError } = await client.select('tenants', {
+      columns: 'id,full_name',
+      eq: { id: f.tenants.t1 },
+    });
     expect(
       nameError,
       `provider could not read the assigned tenant's name: ${nameError?.message}`,
     ).toBeNull();
     expect((nameOnly ?? []).length).toBe(1);
 
-    const { data: contact, error: contactError } = await client
-      .from('tenants')
-      .select('id,email,phone')
-      .eq('id', f.tenants.t1);
+    const { data: contact, error: contactError } = await client.select('tenants', {
+      columns: 'id,email,phone',
+      eq: { id: f.tenants.t1 },
+    });
 
     const exposed = ((contact ?? []) as { email: string | null; phone: string | null }[]).filter(
       (r) => r.email === SHARED_SHAPE.tenantEmails[0] || r.phone === SHARED_SHAPE.tenantPhones[0],
@@ -223,10 +223,10 @@ describe('a service provider sees only assigned work', () => {
     const f = orgFixture(world, 'A');
     const client = clientFor(world, 'A', 'service_provider');
 
-    const { data: properties } = await client.from('properties').select('id');
+    const { data: properties } = await client.select('properties', { columns: 'id' });
     expect((properties ?? []).map((r) => (r as { id: string }).id)).toEqual([f.properties.p1]);
 
-    const { data: units } = await client.from('property_units').select('id');
+    const { data: units } = await client.select('property_units', { columns: 'id' });
     expect((units ?? []).map((r) => (r as { id: string }).id)).toEqual([f.units.p1u1]);
     recordPass({ dimension: 'integrity', label: 'provider property/unit scope' });
   });
@@ -237,7 +237,7 @@ describe('a property owner sees only what they own', () => {
     const f = orgFixture(world, 'A');
     const client = clientFor(world, 'A', 'property_owner');
 
-    const { data, error } = await client.from('properties').select('id,owner_member_id');
+    const { data, error } = await client.select('properties', { columns: 'id,owner_member_id' });
     expect(error).toBeNull();
 
     const rows = (data ?? []) as { id: string; owner_member_id: string | null }[];
@@ -258,7 +258,7 @@ describe('a property owner sees only what they own', () => {
     const client = clientFor(world, 'A', 'property_owner');
 
     const visible = async (table: string) => {
-      const { data } = await client.from(table).select('id');
+      const { data } = await client.select(table, { columns: 'id' });
       return (data ?? []).map((r) => (r as { id: string }).id);
     };
 
@@ -272,7 +272,9 @@ describe('a property owner sees only what they own', () => {
   it('cannot read tenant records at all', async () => {
     // The matrix gives property_owner nothing on `tenants`: an owner is entitled to
     // know a unit is occupied, not to the occupant's personal data.
-    const { data } = await clientFor(world, 'A', 'property_owner').from('tenants').select('id');
+    const { data } = await clientFor(world, 'A', 'property_owner').select('tenants', {
+      columns: 'id',
+    });
     expect(data ?? []).toEqual([]);
     recordPass({ dimension: 'integrity', label: 'owner reads no tenant records' });
   });
@@ -304,7 +306,9 @@ describe('the audit trail is admin-only', () => {
       'tenant',
       'service_provider',
     ] as const) {
-      const { data, error } = await clientFor(world, 'A', role).from('audit_logs').select('id');
+      const { data, error } = await clientFor(world, 'A', role).select('audit_logs', {
+        columns: 'id',
+      });
       if (error) {
         expect(/permission denied|row-level security/i.test(error.message)).toBe(true);
       } else {
@@ -340,9 +344,9 @@ describe('profiles expose nothing across the boundary', () => {
     const ownIds = new Set(Object.values(a.profiles));
     const foreignIds = new Set(Object.values(b.profiles));
 
-    const { data, error } = await clientFor(world, 'A', 'organization_admin')
-      .from('profiles')
-      .select('id,email');
+    const { data, error } = await clientFor(world, 'A', 'organization_admin').select('profiles', {
+      columns: 'id,email',
+    });
     expect(error).toBeNull();
 
     const rows = (data ?? []) as { id: string; email: string | null }[];
@@ -358,7 +362,7 @@ describe('profiles expose nothing across the boundary', () => {
 
   it('a tenant sees exactly one profile: their own', async () => {
     const a = orgFixture(world, 'A');
-    const { data } = await clientFor(world, 'A', 'tenant').from('profiles').select('id');
+    const { data } = await clientFor(world, 'A', 'tenant').select('profiles', { columns: 'id' });
     expect((data ?? []).map((r) => (r as { id: string }).id)).toEqual([a.profiles.a_tenant]);
     recordPass({ dimension: 'integrity', label: 'tenant sees only their own profile' });
   });
@@ -412,9 +416,11 @@ describe('provider completion evidence (amendment A7)', () => {
     const f = orgFixture(world, 'A');
     const client = clientFor(world, 'A', 'service_provider');
     const profileId = f.profiles.a_provider ?? '';
+    // property_id and tenancy_id are omitted deliberately: the policy forces both null
+    // so that a provider cannot staple evidence onto a tenancy or a property and expose
+    // it to that tenancy's tenant or that property's owner. Evidence is ticket-scoped.
     const base = {
       organization_id: f.organizationId,
-      property_id: f.properties.p1,
       document_type: 'completion_evidence',
       verification_status: 'pending',
       uploaded_by: profileId,

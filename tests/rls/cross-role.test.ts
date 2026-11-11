@@ -84,6 +84,19 @@ for (const table of TENANT_SCOPED_TABLES) {
         operation,
         policies: [...(spec.policies ?? [])],
       });
+
+      /**
+       * Who reads the row back to confirm a refused write changed nothing.
+       *
+       * It must be a principal the policies actually let see that row. The admin is the
+       * obvious choice and is wrong for `notifications`, which is `R own` for everyone
+       * including the admin: verifying an owner's notification through the admin reads
+       * zero rows and reports a successful delete that never happened. So the actor
+       * verifies its own in-scope row, and the admin is used only where the actor is
+       * granted nothing at all.
+       */
+      const verifier = () =>
+        spec.select === 'none' ? clientFor(world, ACTOR_ORG, 'organization_admin') : client();
       const skip = (operation: string) => COVERED_ELSEWHERE.has(`${table}.${role}.${operation}`);
 
       /* ------------------------------------------------------------- select -- */
@@ -158,7 +171,7 @@ for (const table of TENANT_SCOPED_TABLES) {
           it(`${role} cannot UPDATE`, async () => {
             const rowId = probe.inScope(f(), role) ?? probe.anyRow(f());
             await expectUpdateDenied(client(), table, rowId, probe.patch.patch, tag('update'), {
-              verifyWith: clientFor(world, ACTOR_ORG, 'organization_admin'),
+              verifyWith: verifier(),
               verifyColumn: probe.patch.column,
             });
           });
@@ -185,10 +198,7 @@ for (const table of TENANT_SCOPED_TABLES) {
                 String(rowId),
                 probe.patch.patch,
                 tag('update'),
-                {
-                  verifyWith: clientFor(world, ACTOR_ORG, 'organization_admin'),
-                  verifyColumn: probe.patch.column,
-                },
+                { verifyWith: verifier(), verifyColumn: probe.patch.column },
               );
             });
           }
@@ -202,7 +212,7 @@ for (const table of TENANT_SCOPED_TABLES) {
       it(`${role} cannot DELETE`, async () => {
         const rowId = probe.inScope(f(), role) ?? probe.anyRow(f());
         await expectDeleteDenied(client(), table, rowId, tag('delete'), {
-          verifyWith: clientFor(world, ACTOR_ORG, 'organization_admin'),
+          verifyWith: verifier(),
         });
       });
     }

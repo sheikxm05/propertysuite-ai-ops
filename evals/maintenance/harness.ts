@@ -19,7 +19,7 @@ import {
   type PriorityDecision,
 } from '@shared/index';
 import { applyUnitClarification } from '@/services/ai/maintenance/draft';
-import { createClassificationProvider } from '@/services/ai/providers/classification-provider';
+import { createClassificationProvider } from '@/services/ai/providers/provider';
 import type { TrustedContext, UnitResolution } from '@/services/ai';
 
 import { recordedCase, recordedTransport, type RecordedTransport } from './recorded-transport';

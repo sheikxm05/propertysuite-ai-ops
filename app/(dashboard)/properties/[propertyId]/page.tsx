@@ -25,7 +25,7 @@ import {
   propertyStatusVariant,
   propertyTypeLabel,
 } from '@/features/properties/labels';
-import { firstParam, resolvePageContext } from '@/features/properties/page-data';
+import { firstParam, resolveOwnerName, resolvePageContext } from '@/features/properties/page-data';
 import { getProperty, listUnits } from '@/features/properties/service';
 import { UnitsPanel } from '@/features/properties/units-panel';
 import { ApiRouteError } from '@/lib/api/errors';
@@ -68,6 +68,11 @@ export default async function PropertyDetailPage({ params, searchParams }: PageP
     if (error instanceof ApiRouteError && error.code === 'NOT_FOUND') notFound();
     throw error;
   }
+
+  // Resolved through `lib/auth/roles.ts`, the only module permitted to read `profiles`.
+  // `null` means this caller may not see the name — correct for a tenant or a provider —
+  // and the field falls back to an id-based label rather than failing the page.
+  const ownerName = await resolveOwnerName(supabase, membership, property.owner_member_id);
 
   const archived = property.status === 'archived';
 
@@ -115,10 +120,7 @@ export default async function PropertyDetailPage({ params, searchParams }: PageP
               label="Owner"
               value={
                 property.owner_member_id
-                  ? // The membership id, not a name. `profiles` is reachable only through
-                    // `lib/auth/roles.ts`, so this lane has no legal source of display
-                    // names — reported as a planning defect.
-                    `Member ${property.owner_member_id.slice(0, 8)}`
+                  ? (ownerName ?? `Member ${property.owner_member_id.slice(0, 8)}`)
                   : 'Not assigned'
               }
             />
