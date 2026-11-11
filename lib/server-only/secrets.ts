@@ -44,6 +44,9 @@ const SecretsSchema = z.object({
 type Secrets = z.infer<typeof SecretsSchema>;
 
 const OptionalSecretsSchema = z.object({
+  NVIDIA_API_KEY: presentValue(
+    z.string().min(20, 'NVIDIA_API_KEY looks too short to be a real key').optional(),
+  ),
   /**
    * Absent in environments that do not exercise the AI lane (for example CI unit runs).
    *
@@ -79,11 +82,30 @@ export function supabaseServiceRoleKey(): string {
  * `services/ai/**` decide whether absence is fatal for their path; a unit-test run of
  * the rest of the application must not require a model credential.
  */
+/**
+ * The NVIDIA NIM credential, or `null` when absent.
+ *
+ * Optional for the same reason the Anthropic key is: a deployment with no AI credential
+ * must take the clean "AI unavailable" path, not fail at boot. A blank value
+ * (`NVIDIA_API_KEY=`) reads as absent, not as a too-short key.
+ */
+export function nvidiaApiKey(): string | null {
+  assertServerRuntime('nvidiaApiKey()');
+  if (!optionalSecretsCache) {
+    optionalSecretsCache = parseEnvOrThrow(OptionalSecretsSchema, {
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+      NVIDIA_API_KEY: process.env.NVIDIA_API_KEY,
+    });
+  }
+  return optionalSecretsCache.NVIDIA_API_KEY ?? null;
+}
+
 export function anthropicApiKey(): string | null {
   assertServerRuntime('anthropicApiKey()');
   if (!optionalSecretsCache) {
     optionalSecretsCache = parseEnvOrThrow(OptionalSecretsSchema, {
       ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+      NVIDIA_API_KEY: process.env.NVIDIA_API_KEY,
     });
   }
   return optionalSecretsCache.ANTHROPIC_API_KEY ?? null;

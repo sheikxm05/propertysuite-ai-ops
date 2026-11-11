@@ -22,6 +22,7 @@ import { isProduction, serverEnv } from '@/lib/env';
 
 import { AiNotConfiguredError } from '../errors';
 import { createAnthropicProvider } from './anthropic';
+import { createNvidiaProvider } from './nvidia';
 import type { AiProvider } from './types';
 
 let cached: AiProvider | null = null;
@@ -44,6 +45,9 @@ export function getAiProvider(): AiProvider {
     case 'anthropic':
       cached = createAnthropicProvider();
       return cached;
+    case 'nvidia':
+      cached = createNvidiaProvider();
+      return cached;
     default:
       throw new AiNotConfiguredError(`unknown_provider_${String(provider)}`);
   }
@@ -64,15 +68,28 @@ export function resetAiProvider(): void {
 }
 
 export { createAnthropicProvider, hasAnthropicCredential } from './anthropic';
-export { createClassificationProvider, evaluateReply } from './classification-provider';
-export type { ClassificationProviderOptions } from './classification-provider';
+export { createNvidiaProvider, hasNvidiaCredential, NVIDIA_TRANSPORT_ID } from './nvidia';
+export {
+  REVIEW_FLAG_OVERRIDE_NOTE,
+  createAiProvider,
+  createClassificationProvider,
+  evaluateDocumentReply,
+  evaluateReply,
+  evaluateWith,
+} from './provider';
+export type { ClassificationProviderOptions, ModelProviderOptions } from './provider';
 export type { ModelCallReply, ModelCallRequest, ModelTransport } from './transport';
 export type {
+  AiCallOptions,
   AiProvider,
   ClassificationResult,
   ClassifyInput,
   ClassifyOptions,
+  DocumentExtractionResult,
+  DocumentTrustedContext,
+  ExtractDocumentInput,
   TrustedContext,
   UnitResolution,
+  UntrustedDocument,
   UntrustedInput,
 } from './types';

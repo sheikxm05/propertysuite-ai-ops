@@ -133,7 +133,10 @@ const ServerEnvSchema = z.object({
   APP_BASE_URL: presentValue(
     z.string().url('APP_BASE_URL must be a URL').default('http://localhost:3000'),
   ),
-  AI_PROVIDER: presentValue(z.enum(['anthropic']).default('anthropic')),
+  AI_PROVIDER: presentValue(z.enum(['anthropic', 'nvidia']).default('anthropic')),
+  // NVIDIA NIM is OpenAI-compatible REST, so no SDK and no new dependency.
+  NVIDIA_BASE_URL: presentValue(z.string().url().default('https://integrate.api.nvidia.com/v1')),
+  NVIDIA_TEMPERATURE: presentValue(z.coerce.number().min(0).max(2).default(0.4)),
   AI_MODEL: presentValue(z.string().min(1).default('claude-sonnet-5')),
 });
 
@@ -152,6 +155,8 @@ export function serverEnv(): ServerEnv {
     NODE_ENV: process.env.NODE_ENV,
     APP_BASE_URL: process.env.APP_BASE_URL,
     AI_PROVIDER: process.env.AI_PROVIDER,
+    NVIDIA_BASE_URL: process.env.NVIDIA_BASE_URL,
+    NVIDIA_TEMPERATURE: process.env.NVIDIA_TEMPERATURE,
     AI_MODEL: process.env.AI_MODEL,
   });
   return serverEnvCache;
