@@ -120,12 +120,29 @@ function FormControl({ children }: { children: React.ReactElement }) {
   const field = useField();
   const invalid = field.errors.length > 0;
 
-  return React.cloneElement(children, {
+  // A child created in a SERVER component arrives through the Flight stream, and React's
+  // Flight client replaces an element still blocked on a chunk with a lazy wrapper
+  // (`createLazyChunkWrapper`): { $$typeof: REACT_LAZY_TYPE, _payload, _init }. That has
+  // no `.props`, so cloning it threw `Cannot read properties of undefined (reading
+  // 'name')` and 500'd the route. Which elements get wrapped depends on chunk ordering,
+  // which is why it looked arbitrary and build-sensitive.
+  //
+  // Render it untouched rather than throwing. NOTE the a11y wiring and the `name`
+  // attribute are then lost, so this is a seatbelt, not the fix: the real fix is to
+  // author the field in a Client Component, which every call site now does.
+  //
+  // Optional chaining alone is NOT sufficient — it converts the TypeError into React's
+  // "The argument must be a React element", which is still a 500.
+  if (!React.isValidElement<{ name?: string }>(children)) return <>{children}</>;
+
+  // `children` is narrowed above, so `children.props.name` is safe without a cast. The
+  // element itself is widened only so the extra DOM attributes typecheck.
+  return React.cloneElement(children as React.ReactElement<Record<string, unknown>>, {
     id: field.id,
-    name: (children.props as { name?: string }).name ?? field.name,
+    name: children.props.name ?? field.name,
     'aria-invalid': invalid || undefined,
     'aria-describedby': invalid ? field.messageId : field.descriptionId,
-  } as React.HTMLAttributes<HTMLElement>);
+  });
 }
 
 function FormDescription({ className, ...props }: React.ComponentProps<'p'>) {

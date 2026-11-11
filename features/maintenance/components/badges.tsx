@@ -1,20 +1,23 @@
 /**
- * Status and priority chips.
+ * Status and priority chips for the maintenance surfaces.
  *
- * The colour decision lives here, once, rather than at each call site —
- * `components/ui/badge.tsx` deliberately exposes semantic variants ("Keep semantic names
- * here rather than colours at the call site, so status colour stays consistent across
- * every surface"). The two maps are keyed by the shared enums and typed
- * `Record<TicketStatus, ...>` / `Record<TicketPriority, ...>`, so adding a status to
- * `packages/shared` without colouring it here is a compile error rather than an
- * invisible grey chip.
+ * The colour decision no longer lives here. It lives in `components/ui/status.ts`, the
+ * single table that maps every domain status in the product onto a semantic badge
+ * variant — because this file used to hold one of six separate mappings and the meanings
+ * had drifted: amber meant "a human still has to decide" on the ticket screens and
+ * something else on the document ones. Colour that means different things on different
+ * pages teaches the reader a rule and then breaks it.
  *
- * Labels are written out rather than derived from the enum value because
- * `awaiting_approval` should read "Awaiting approval" and `in_progress` "In progress" —
- * a `replace('_', ' ')` would also happily render a future enum member as nonsense.
+ * The maps there are keyed by the enums in `packages/shared`, so adding a status without
+ * colouring it is still a compile error rather than an invisible grey chip — the
+ * property this file was written to protect, kept, just one level up.
+ *
+ * What stays here is the maintenance-specific rendering: the two chip components and the
+ * category label, which are what the ticket screens actually import.
  */
 
 import { Badge } from '@/components/ui/badge';
+import { TICKET_PRIORITY_STYLE, TICKET_STATUS_STYLE } from '@/components/ui/status';
 import {
   MAINTENANCE_CATEGORY_LABELS,
   type MaintenanceCategory,
@@ -22,31 +25,13 @@ import {
   type TicketStatus,
 } from '@shared/index';
 
-type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'success' | 'warning' | 'outline';
-
-const STATUS_STYLE: Readonly<Record<TicketStatus, { label: string; variant: BadgeVariant }>> = {
-  open: { label: 'Open', variant: 'secondary' },
-  assigned: { label: 'Assigned', variant: 'default' },
-  in_progress: { label: 'In progress', variant: 'default' },
-  awaiting_approval: { label: 'Awaiting approval', variant: 'warning' },
-  completed: { label: 'Completed', variant: 'success' },
-  cancelled: { label: 'Cancelled', variant: 'outline' },
-};
-
-const PRIORITY_STYLE: Readonly<Record<TicketPriority, { label: string; variant: BadgeVariant }>> = {
-  low: { label: 'Low', variant: 'outline' },
-  normal: { label: 'Normal', variant: 'secondary' },
-  high: { label: 'High', variant: 'warning' },
-  urgent: { label: 'Urgent', variant: 'destructive' },
-};
-
 export function StatusBadge({ status }: { status: TicketStatus }) {
-  const style = STATUS_STYLE[status];
+  const style = TICKET_STATUS_STYLE[status];
   return <Badge variant={style.variant}>{style.label}</Badge>;
 }
 
 export function PriorityBadge({ priority }: { priority: TicketPriority }) {
-  const style = PRIORITY_STYLE[priority];
+  const style = TICKET_PRIORITY_STYLE[priority];
   return <Badge variant={style.variant}>{style.label}</Badge>;
 }
 
@@ -58,9 +43,9 @@ export function CategoryLabel({ category }: { category: MaintenanceCategory }) {
 }
 
 export function statusLabel(status: TicketStatus): string {
-  return STATUS_STYLE[status].label;
+  return TICKET_STATUS_STYLE[status].label;
 }
 
 export function priorityLabel(priority: TicketPriority): string {
-  return PRIORITY_STYLE[priority].label;
+  return TICKET_PRIORITY_STYLE[priority].label;
 }

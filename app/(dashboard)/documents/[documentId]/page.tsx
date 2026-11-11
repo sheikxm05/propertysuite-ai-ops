@@ -24,10 +24,19 @@
 
 import { notFound, redirect } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, FileCheck2, FileClock, FileX2, ShieldAlert } from 'lucide-react';
+import {
+  ArrowLeft,
+  FileCheck2,
+  FileClock,
+  FileX2,
+  ShieldAlert,
+  type LucideIcon,
+} from 'lucide-react';
 
+import { PageHeader } from '@/components/shell/page-header';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
+import { VERIFICATION_STATUS_STYLE, styleFor } from '@/components/ui/status';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { resolveMembership } from '@/lib/auth/roles';
@@ -103,26 +112,22 @@ export default async function DocumentDetailPage({
 
   return (
     <div className="space-y-6">
-      <Link
-        href="/documents"
-        className="inline-flex items-center gap-1 text-sm text-muted-foreground underline-offset-4 hover:underline"
-      >
-        <ArrowLeft className="size-4" aria-hidden />
-        All documents
-      </Link>
-
-      <header className="space-y-2">
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {documentTypeLabel(document.document_type)}
-          </h1>
-          <StateBadge status={document.verification_status} />
-        </div>
-        <p className="text-sm text-muted-foreground">
-          Uploaded {formatDate(document.created_at)}
-          {document.ticket_id ? ' · attached to a maintenance ticket' : ''}
-        </p>
-      </header>
+      <PageHeader
+        eyebrow={
+          <Link
+            href="/documents"
+            className="inline-flex items-center gap-1 underline-offset-4 hover:underline"
+          >
+            <ArrowLeft className="size-3.5" aria-hidden />
+            All documents
+          </Link>
+        }
+        title={documentTypeLabel(document.document_type)}
+        description={`Uploaded ${formatDate(document.created_at)}${
+          document.ticket_id ? ' · attached to a maintenance ticket' : ''
+        }`}
+        actions={<StateBadge status={document.verification_status} />}
+      />
 
       {isPending ? (
         <Alert variant="warning">
@@ -220,28 +225,24 @@ export default async function DocumentDetailPage({
   );
 }
 
+const STATE_ICON: Record<string, LucideIcon> = {
+  verified: FileCheck2,
+  rejected: FileX2,
+  pending: FileClock,
+};
+
+/**
+ * The verification chip. Its colour comes from `VERIFICATION_STATUS_STYLE` rather than a
+ * branch here, so "amber means a human has not committed yet" holds on this page, on the
+ * document list and on the maintenance queue alike.
+ */
 function StateBadge({ status }: { status: string }) {
-  const label = VERIFICATION_LABELS[status] ?? status;
-  if (status === 'verified') {
-    return (
-      <Badge variant="success" className="gap-1">
-        <FileCheck2 className="size-3" aria-hidden />
-        {label}
-      </Badge>
-    );
-  }
-  if (status === 'rejected') {
-    return (
-      <Badge variant="destructive" className="gap-1">
-        <FileX2 className="size-3" aria-hidden />
-        {label}
-      </Badge>
-    );
-  }
+  const style = styleFor(VERIFICATION_STATUS_STYLE, status);
+  const Icon = STATE_ICON[status];
   return (
-    <Badge variant="warning" className="gap-1">
-      <FileClock className="size-3" aria-hidden />
-      {label}
+    <Badge variant={style.variant} className="gap-1 whitespace-nowrap">
+      {Icon ? <Icon className="size-3" aria-hidden /> : null}
+      {VERIFICATION_LABELS[status] ?? style.label}
     </Badge>
   );
 }

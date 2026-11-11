@@ -18,8 +18,11 @@
 
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
+import { DoorOpen } from 'lucide-react';
+
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -146,15 +149,31 @@ export function UnitsPanel({
         ) : null}
 
         {units.length === 0 ? (
-          <p className="py-6 text-sm text-muted-foreground">No units are visible to you.</p>
+          <EmptyState
+            icon={DoorOpen}
+            title="No units are visible to you"
+            description={
+              canWrite
+                ? 'Add the first unit and tenancies, tickets and documents can all be recorded against it.'
+                : 'Your role sees only the units it is connected to — the one you lease, or the one behind a job assigned to you.'
+            }
+          />
         ) : (
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>Unit</TableHead>
-                <TableHead>Bedrooms</TableHead>
-                <TableHead>Bathrooms</TableHead>
-                <TableHead>Area</TableHead>
+                {/* Bedrooms, bathrooms and area are numeric columns, so they are right
+                    aligned and tabular; the two narrowest fold away on a phone. */}
+                <TableHead numeric className="hidden sm:table-cell">
+                  Bedrooms
+                </TableHead>
+                <TableHead numeric className="hidden sm:table-cell">
+                  Bathrooms
+                </TableHead>
+                <TableHead numeric className="hidden md:table-cell">
+                  Area
+                </TableHead>
                 <TableHead>Status</TableHead>
                 {canWrite ? <TableHead className="w-48">Change status</TableHead> : null}
               </TableRow>
@@ -165,11 +184,17 @@ export function UnitsPanel({
                 return (
                   <TableRow key={unit.id}>
                     <TableCell className="font-medium">{unit.unit_number}</TableCell>
-                    <TableCell>{formatBedrooms(unit.bedrooms)}</TableCell>
-                    <TableCell>{formatBathrooms(unit.bathrooms)}</TableCell>
-                    <TableCell>{formatArea(unit.area_sqft)}</TableCell>
+                    <TableCell numeric className="hidden sm:table-cell">
+                      {formatBedrooms(unit.bedrooms)}
+                    </TableCell>
+                    <TableCell numeric className="hidden sm:table-cell">
+                      {formatBathrooms(unit.bathrooms)}
+                    </TableCell>
+                    <TableCell numeric className="hidden whitespace-nowrap md:table-cell">
+                      {formatArea(unit.area_sqft)}
+                    </TableCell>
                     <TableCell>
-                      <Badge variant={unitStatusVariant(unit.status)}>
+                      <Badge variant={unitStatusVariant(unit.status)} className="whitespace-nowrap">
                         {unitStatusLabel(unit.status)}
                       </Badge>
                     </TableCell>

@@ -17,17 +17,8 @@ import Link from 'next/link';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  FormControl,
-  FormDescription,
-  FormField,
-  FormLabel,
-  FormMessage,
-} from '@/components/ui/form';
-import { Input } from '@/components/ui/input';
 
-import { createFirstOrganization } from '@/app/(auth)/actions';
-import { ActionForm } from '@/app/(auth)/components/action-form';
+import { CreateOrganizationForm } from './create-organization-form';
 
 export function OnboardingPanel() {
   return (
@@ -41,31 +32,7 @@ export function OnboardingPanel() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <ActionForm
-            action={createFirstOrganization}
-            submitLabel="Create organization"
-            pendingLabel="Creating…"
-          >
-            <FormField name="name">
-              <FormLabel>Organization name</FormLabel>
-              <FormControl>
-                <Input autoFocus required />
-              </FormControl>
-              <FormMessage />
-            </FormField>
-
-            <FormField name="slug">
-              <FormLabel>Address</FormLabel>
-              <FormControl>
-                <Input required placeholder="marina-properties" />
-              </FormControl>
-              <FormDescription>
-                Lowercase letters, digits and single hyphens. Permanent — there is no rename path in
-                this build.
-              </FormDescription>
-              <FormMessage />
-            </FormField>
-          </ActionForm>
+          <CreateOrganizationForm />
         </CardContent>
       </Card>
 

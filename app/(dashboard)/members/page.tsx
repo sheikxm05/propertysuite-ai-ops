@@ -23,9 +23,16 @@
  * the body, and `organization_members_update_admin` denies the statement in Postgres.
  */
 
+import Link from 'next/link';
+import { Users } from 'lucide-react';
+
+import { PageHeader } from '@/components/shell/page-header';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
+import { MEMBER_STATUS_STYLE } from '@/components/ui/status';
 import {
   Table,
   TableBody,
@@ -39,15 +46,9 @@ import { MemberRoleControl } from '@/features/organizations/components/member-ro
 import { OnboardingPanel } from '@/features/organizations/components/onboarding-panel';
 import { listMembers } from '@/features/organizations/queries';
 import { requireContext } from '@/features/organizations/server-context';
-import { MEMBER_ROLE_LABELS, type MemberStatus } from '@shared/index';
+import { MEMBER_ROLE_LABELS } from '@shared/index';
 
 export const metadata = { title: 'Members' };
-
-const STATUS_VARIANT: Record<MemberStatus, 'success' | 'warning' | 'secondary'> = {
-  active: 'success',
-  invited: 'warning',
-  disabled: 'secondary',
-};
 
 export default async function MembersPage() {
   const { supabase, membership } = await requireContext();
@@ -55,10 +56,10 @@ export default async function MembersPage() {
   if (!membership) {
     return (
       <div className="space-y-6">
-        <header>
-          <h1 className="text-2xl font-semibold tracking-tight">Members</h1>
-          <p className="text-sm text-muted-foreground">You do not belong to an organization yet.</p>
-        </header>
+        <PageHeader
+          title="Members"
+          description="You do not belong to an organization yet. Create one and become its administrator, or redeem an invitation to join an existing one."
+        />
         <OnboardingPanel />
       </div>
     );
@@ -71,12 +72,18 @@ export default async function MembersPage() {
 
   return (
     <div className="space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Members</h1>
-        <p className="text-sm text-muted-foreground">
-          {membership.organization.name} · {MEMBER_ROLE_LABELS[membership.role]}
-        </p>
-      </header>
+      <PageHeader
+        eyebrow={membership.organization.name}
+        title="Members"
+        description="Who belongs to this organization, and with what role. What you can see of this roster is decided by two policies in Postgres, not by this page."
+        actions={
+          isAdmin ? (
+            <Button asChild variant="outline">
+              <Link href="/organization">Invite somebody</Link>
+            </Button>
+          ) : null
+        }
+      />
 
       {seesOnlySelf && !isAdmin ? (
         <Alert>
@@ -96,7 +103,18 @@ export default async function MembersPage() {
         </CardHeader>
         <CardContent>
           {page.items.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No members are visible to you.</p>
+            <EmptyState
+              icon={Users}
+              title="No members are visible to you"
+              description="An empty roster is not a missing record: it is what the select policies return to a role that may not read the organization's membership."
+              action={
+                isAdmin ? (
+                  <Button asChild variant="outline">
+                    <Link href="/organization">Invite somebody</Link>
+                  </Button>
+                ) : null
+              }
+            />
           ) : (
             <Table>
               {page.hasMore ? (
@@ -108,10 +126,12 @@ export default async function MembersPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Name</TableHead>
-                  <TableHead>Contact</TableHead>
-                  <TableHead>Role</TableHead>
+                  {/* Contact folds away below `sm`; the name, role and status are what a
+                      roster is read for. */}
+                  <TableHead className="hidden sm:table-cell">Contact</TableHead>
+                  <TableHead className="hidden md:table-cell">Role</TableHead>
                   <TableHead>Status</TableHead>
-                  {isAdmin ? <TableHead>Change</TableHead> : null}
+                  {isAdmin ? <TableHead numeric>Change</TableHead> : null}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -125,19 +145,29 @@ export default async function MembersPage() {
                           <span className="ml-2 text-xs text-muted-foreground">(you)</span>
                         ) : null}
                       </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
+                      <TableCell className="hidden text-sm text-muted-foreground sm:table-cell">
                         {/*
                           Withheld by the matrix rather than missing from the database.
                           An em dash is the honest rendering of "you may not read this".
                         */}
                         {member.profile?.email ?? '—'}
                       </TableCell>
-                      <TableCell>{MEMBER_ROLE_LABELS[member.role]}</TableCell>
+                      <TableCell className="hidden md:table-cell">
+                        {MEMBER_ROLE_LABELS[member.role]}
+                      </TableCell>
                       <TableCell>
-                        <Badge variant={STATUS_VARIANT[member.status]}>{member.status}</Badge>
+                        {/* One table decides what every status colour means; see
+                            `components/ui/status.ts`. Invited is amber because somebody
+                            still has to act on it. */}
+                        <Badge
+                          variant={MEMBER_STATUS_STYLE[member.status].variant}
+                          className="whitespace-nowrap"
+                        >
+                          {MEMBER_STATUS_STYLE[member.status].label}
+                        </Badge>
                       </TableCell>
                       {isAdmin ? (
-                        <TableCell>
+                        <TableCell numeric>
                           <MemberRoleControl
                             memberId={member.id}
                             role={member.role}

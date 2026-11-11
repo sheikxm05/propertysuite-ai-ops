@@ -35,6 +35,7 @@
 
 import Link from 'next/link';
 
+import { PageHeader } from '@/components/shell/page-header';
 import { Button } from '@/components/ui/button';
 import { ReportIssuePanel } from '@/features/ai-intake';
 import { listReportableUnits } from '@/features/maintenance/domain';
@@ -74,13 +75,16 @@ export default async function ReportIssuePage() {
 
   return (
     <div className="max-w-3xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Report an issue</h1>
-        <p className="text-sm text-muted-foreground">
-          Describe the problem in your own words. Nothing is filed until you review the draft and
-          confirm it.
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Maintenance"
+        title="Report an issue"
+        description="Describe the problem in your own words. Nothing is filed until you review the draft and confirm it."
+        actions={
+          <Button asChild variant="outline">
+            <Link href="/maintenance">Cancel</Link>
+          </Button>
+        }
+      />
 
       <ReportIssuePanel units={units} />
 
@@ -97,8 +101,8 @@ export default async function ReportIssuePage() {
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="max-w-2xl space-y-4">
-      <h1 className="text-2xl font-semibold tracking-tight">Report an issue</h1>
+    <div className="max-w-2xl space-y-6">
+      <PageHeader eyebrow="Maintenance" title="Report an issue" />
       {children}
     </div>
   );

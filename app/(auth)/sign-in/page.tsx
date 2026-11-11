@@ -6,6 +6,9 @@
  * re-validated as a relative path in two places: `safeReturnTo` in the middleware when
  * it is set, and `safeNext` in `actions.ts` when it is used. It is rendered into a hidden
  * field here rather than kept in the URL only, so it survives a failed submission.
+ *
+ * The fields live in `components/sign-in-form.tsx`, a Client Component — see the header
+ * of `components/sign-up-form.tsx` for why that is a correctness requirement.
  */
 
 import Link from 'next/link';
@@ -18,11 +21,8 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import { FormControl, FormField, FormLabel, FormMessage } from '@/components/ui/form';
-import { Input } from '@/components/ui/input';
 
-import { signIn } from '../actions';
-import { ActionForm } from '../components/action-form';
+import { SignInForm } from '../components/sign-in-form';
 
 export const metadata = { title: 'Sign in' };
 
@@ -42,26 +42,7 @@ export default async function SignInPage({
       </CardHeader>
 
       <CardContent>
-        <ActionForm action={signIn} submitLabel="Sign in" pendingLabel="Signing in…">
-          {/* Validated again server-side; never trusted as given. */}
-          <input type="hidden" name="next" value={next ?? ''} />
-
-          <FormField name="email">
-            <FormLabel>Email address</FormLabel>
-            <FormControl>
-              <Input type="email" autoComplete="email" autoFocus required />
-            </FormControl>
-            <FormMessage />
-          </FormField>
-
-          <FormField name="password">
-            <FormLabel>Password</FormLabel>
-            <FormControl>
-              <Input type="password" autoComplete="current-password" required />
-            </FormControl>
-            <FormMessage />
-          </FormField>
-        </ActionForm>
+        <SignInForm next={next} />
       </CardContent>
 
       <CardFooter className="flex-col items-start gap-2 text-sm">

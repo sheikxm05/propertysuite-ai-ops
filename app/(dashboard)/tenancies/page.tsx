@@ -7,8 +7,11 @@
  * wrong `listTenancies` would scope the rows to their own tenancy anyway.
  */
 
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { PageHeader } from '@/components/shell/page-header';
+import { Button } from '@/components/ui/button';
 import { ListTenanciesQuerySchema } from '@shared/index';
 
 import { listTenancies } from '@/features/tenancies/server/tenancy-service';
@@ -32,12 +35,11 @@ export default async function TenanciesPage({ searchParams }: PageProps) {
   if (viewer.membership.role === 'tenant') {
     return (
       <section className="space-y-6">
-        <header>
-          <h1 className="text-2xl font-semibold tracking-tight">My tenancy</h1>
-          <p className="text-sm text-muted-foreground">
-            Your lease with {viewer.membership.organization.name}.
-          </p>
-        </header>
+        <PageHeader
+          eyebrow={viewer.membership.organization.name}
+          title="My tenancy"
+          description="Your lease, and nobody else's. The register other roles see is the same route — the rows are what differ."
+        />
         <MyTenancy viewer={viewer} />
       </section>
     );
@@ -59,23 +61,20 @@ export default async function TenanciesPage({ searchParams }: PageProps) {
 
   return (
     <section className="space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Tenancies</h1>
-        <p className="text-sm text-muted-foreground">
-          Leases in {viewer.membership.organization.name}. Rent and contract details are visible to
-          staff and to the tenant named on the lease.
-        </p>
-      </header>
+      <PageHeader
+        eyebrow={viewer.membership.organization.name}
+        title="Tenancies"
+        description="Rent and contract details are visible to staff and to the tenant named on the lease — and to nobody else, enforced in Postgres rather than by this page."
+      />
 
       <TenancyTable tenancies={page.items} />
 
       {page.hasMore && page.nextCursor ? (
-        <a
-          className="inline-flex text-sm underline underline-offset-4"
-          href={`/tenancies?cursor=${encodeURIComponent(page.nextCursor)}`}
-        >
-          Next page
-        </a>
+        <div className="flex justify-end">
+          <Button asChild variant="secondary">
+            <Link href={`/tenancies?cursor=${encodeURIComponent(page.nextCursor)}`}>Next page</Link>
+          </Button>
+        </div>
       ) : null}
     </section>
   );

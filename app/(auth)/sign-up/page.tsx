@@ -12,6 +12,10 @@
  * signs up with a different address cannot redeem the invitation they were sent — and
  * there is no self-service way to change the address of record, because that lives in
  * `auth.users` and is an identity operation.
+ *
+ * The fields live in `components/sign-up-form.tsx`, a Client Component, and that is a
+ * correctness requirement rather than taste — see the header of that file for the Flight
+ * lazy-wrapper crash it fixes.
  */
 
 import Link from 'next/link';
@@ -25,17 +29,8 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import {
-  FormControl,
-  FormDescription,
-  FormField,
-  FormLabel,
-  FormMessage,
-} from '@/components/ui/form';
-import { Input } from '@/components/ui/input';
 
-import { signUp } from '../actions';
-import { ActionForm } from '../components/action-form';
+import { SignUpForm } from '../components/sign-up-form';
 
 export const metadata = { title: 'Create an account' };
 
@@ -58,32 +53,7 @@ export default function SignUpPage() {
           </AlertDescription>
         </Alert>
 
-        <ActionForm action={signUp} submitLabel="Create account" pendingLabel="Creating account…">
-          <FormField name="full_name">
-            <FormLabel>Full name</FormLabel>
-            <FormControl>
-              <Input autoComplete="name" autoFocus required />
-            </FormControl>
-            <FormMessage />
-          </FormField>
-
-          <FormField name="email">
-            <FormLabel>Email address</FormLabel>
-            <FormControl>
-              <Input type="email" autoComplete="email" required />
-            </FormControl>
-            <FormMessage />
-          </FormField>
-
-          <FormField name="password">
-            <FormLabel>Password</FormLabel>
-            <FormControl>
-              <Input type="password" autoComplete="new-password" required />
-            </FormControl>
-            <FormDescription>At least 8 characters.</FormDescription>
-            <FormMessage />
-          </FormField>
-        </ActionForm>
+        <SignUpForm />
       </CardContent>
 
       <CardFooter className="text-sm text-muted-foreground">

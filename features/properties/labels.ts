@@ -11,6 +11,12 @@
  */
 
 import {
+  PROPERTY_STATUS_STYLE,
+  UNIT_STATUS_STYLE,
+  styleFor,
+  type StatusVariant,
+} from '@/components/ui/status';
+import {
   DEFAULT_LOCALE,
   PROPERTY_STATUSES,
   PROPERTY_TYPES,
@@ -73,15 +79,22 @@ export function unitStatusLabel(value: string): string {
   return labelOr(UNIT_STATUS_LABELS, value, UNIT_STATUSES);
 }
 
-/** Badge variant per status. `components/ui/badge.tsx` defines the four variants. */
-export function propertyStatusVariant(value: string): 'default' | 'secondary' | 'outline' {
-  return value === 'archived' ? 'secondary' : 'default';
+/**
+ * Badge variant per status, delegated to `components/ui/status.ts`.
+ *
+ * This file used to decide the colours itself, and it had drifted from the rest of the
+ * product: an active property was `default` here while an active tenancy was `success`
+ * two screens away, and an archived property was `secondary` — the same chip a
+ * not-yet-started item wears. `styleFor` is the string-keyed lookup, used because both
+ * columns are `text` in SQL and a row written outside the application can hold a value
+ * the enum does not know; it degrades to `outline` rather than throwing.
+ */
+export function propertyStatusVariant(value: string): StatusVariant {
+  return styleFor(PROPERTY_STATUS_STYLE, value).variant;
 }
 
-export function unitStatusVariant(value: string): 'default' | 'secondary' | 'outline' {
-  if (value === 'occupied') return 'default';
-  if (value === 'inactive') return 'secondary';
-  return 'outline';
+export function unitStatusVariant(value: string): StatusVariant {
+  return styleFor(UNIT_STATUS_STYLE, value).variant;
 }
 
 /** `en-AE` per §5.7. A measurement, not money — see `MoneyAmountSchema` for amounts. */

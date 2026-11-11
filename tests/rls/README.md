@@ -92,6 +92,44 @@ node scripts/reset-db.mjs                # rebuild from migrations; fixtures re-
 node scripts/supabase-local.mjs env      # export lines for .env.local
 ```
 
+## What a live run actually produced
+
+Until 2026-11-12 this suite had never been executed end to end. It has now run against
+the real Supabase project over the Supavisor session pooler, `PS_RLS_DRIVER=pg`, all
+three migrations applied:
+
+```
+Test Files  7 (912 cases)
+Tests       901 passed | 8 skipped | 3 failed
+Duration    1714 s
+
+RLS POLICY COVERAGE
+matrix cells        : 320
+assertions recorded : 932
+policies in SQL     : 70
+policies exercised  : 70
+coverage gaps       : 0
+```
+
+The eight skips are `storage.test.ts`'s HTTP cases — signed-URL minting, expiry and
+signature-vs-path — which PostgREST is not in play to serve on the `pg` driver. They
+report as skipped rather than passing, which is the point.
+
+The three failures, named rather than summarised:
+
+| Case                                                                                      | Verdict                                                                                                                                                                                                                             |
+| ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `role-scoping > a service provider … sees the tenant's name but not their email or phone` | **A real defect**, reproducible on every run. See "Open finding" below. Not this lane's to fix and deliberately left failing.                                                                                                       |
+| `cross-organization > filtering by the other organization_id returns nothing, for every role` | A 60 s **timeout**, not a denial that failed. One `it` makes 2 x 5 x 14 = 140 sequential round trips; at 0.45 s each that is 63 s. `testTimeout` for the RLS suite is now 300 s, which measures policies instead of the network. |
+| `cross-role > ai_messages > service_provider cannot UPDATE`                               | The same timeout, from a single ~70 s pooler stall between two neighbours that took 0.5 s and 1.2 s. Same fix.                                                                                                                      |
+
+A timeout reads exactly like an isolation failure in a report and is not one, so neither
+was left to be re-interpreted later.
+
+The database was left byte-for-byte as it was found — ticket, activity, audit, property
+and document counts were identical before and after, because every assertion runs inside
+a transaction that is rolled back.
+
 ## What it asserts
 
 | File                         | Claim                                                                                                                                                                                                                                                                                                |
@@ -186,6 +224,25 @@ The first two fail the run. The third is reported loudly but does not fail it, b
 this lane does not own the migrations.
 
 Report: `test-results/policy-coverage/policy-coverage.md`, plus a summary on stdout.
+
+### "Not evaluated" is a third answer, and the gate uses it
+
+Run `npx vitest run` with no RLS filter and the gate stays silent: `tests/rls/**` is
+excluded, the global setup is never registered, and nothing is reported. Run it with
+`PS_RLS=1` but a filter that happens to match no RLS file and the teardown prints
+`RLS POLICY COVERAGE — NOT EVALUATED` and exits 0.
+
+Neither reports 754 coverage gaps, which is what an empty ledger literally measures. A
+gate that cries wolf on somebody else's default command stops being read, and the first
+thing a disbelieved gate loses is the one run where it was right.
+
+### The ledger survives a concurrent run
+
+Starting a second `PS_RLS=1` invocation while the suite was mid-flight used to delete
+the running ledger: part files were scoped to a run id, but `resetCoverageDirectory()`
+deleted every file that was not this run's. A 600-record ledger went to zero and the
+suite then reported gaps for cells it had already proven. Parts from another run are now
+left alone unless they are more than an hour stale.
 
 ## Fixture shape
 

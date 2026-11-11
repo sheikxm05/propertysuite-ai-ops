@@ -26,7 +26,15 @@
  * would eventually be "fixed" by relaxing the gate.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { resolve } from 'node:path';
 
 export const COVERAGE_DIR = resolve(__dirname, '..', '..', 'test-results', 'policy-coverage');
@@ -58,10 +66,13 @@ const keyOf = (r: CoverageRecord) =>
  *
  * The first design keyed them on the pid alone, and a long run came back reporting 3
  * assertions out of 902 — the ledger had been emptied underneath it. Scoping the name
- * to a run id makes that impossible to do silently: a concurrent `vitest` invocation,
- * a recycled worker or a stale file from a previous run can no longer be mistaken for,
- * or clobber, this run's records. `beginCoverageRun` publishes the id through the
- * environment, which Vitest forwards to workers spawned after global setup.
+ * to a run id means a concurrent `vitest` invocation, a recycled worker or a stale file
+ * from a previous run can no longer be MISCOUNTED into this run's totals.
+ * `beginCoverageRun` publishes the id through the environment, which Vitest forwards to
+ * workers spawned after global setup.
+ *
+ * Scoping alone does not stop a concurrent run from DELETING these files, which is a
+ * separate problem with a separate fix — see `resetCoverageDirectory`.
  */
 export const RUN_ID_ENV = 'PS_RLS_RUN_ID';
 
@@ -100,17 +111,45 @@ export function flushCoverage(): void {
 }
 
 /**
- * Removes part files from OTHER runs. Never touches this run's own files, so it cannot
- * delete records that have already been proven.
+ * How long a part file from another run is left alone. Anything still being appended to
+ * belongs to a run that has not finished; anything older than this is debris.
+ */
+const STALE_PART_MS = 60 * 60 * 1000;
+
+/**
+ * Removes STALE part files from other runs. Never touches this run's own files, and
+ * never touches a file another run is still writing to.
+ *
+ * The first version deleted every part file that did not belong to this run, on the
+ * reasoning that run-id scoping already made the records unambiguous. Running two
+ * invocations at once showed that reasoning was backwards: scoping stops a concurrent
+ * run's records from being *counted*, but the unconditional delete still destroyed
+ * them. A `PS_RLS=1 vitest run <one file>` started while the full suite was mid-flight
+ * wiped a 600-record ledger, and the suite went on to report coverage gaps for cells it
+ * had already proven — the precise failure mode this file's header warns about, which
+ * would eventually be "fixed" by relaxing the gate.
+ *
+ * Age is read from mtime rather than from the run id, because the id carries no clock a
+ * second process can trust.
  */
 export function resetCoverageDirectory(): void {
   mkdirSync(COVERAGE_DIR, { recursive: true });
   const mine = `part-${runId()}-`;
+  const now = Date.now();
+
   for (const file of readdirSync(COVERAGE_DIR)) {
     const isPart = isPartFile(file) || (file.startsWith('part-') && file.endsWith('.json'));
-    if (isPart && !file.startsWith(mine)) {
-      rmSync(resolve(COVERAGE_DIR, file), { force: true });
+    if (!isPart || file.startsWith(mine)) continue;
+
+    const path = resolve(COVERAGE_DIR, file);
+    let age = Number.POSITIVE_INFINITY;
+    try {
+      age = now - statSync(path).mtimeMs;
+    } catch {
+      // Vanished underneath us — another run's teardown got there first.
+      continue;
     }
+    if (age > STALE_PART_MS) rmSync(path, { force: true });
   }
 }
 

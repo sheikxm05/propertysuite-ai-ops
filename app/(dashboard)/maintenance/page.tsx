@@ -19,8 +19,11 @@
  */
 
 import Link from 'next/link';
+import { SearchX, Wrench } from 'lucide-react';
 
+import { PageHeader } from '@/components/shell/page-header';
 import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   ListTicketsQuerySchema,
@@ -44,10 +47,19 @@ export default async function MaintenancePage({ searchParams }: { searchParams: 
 
   if (!membership) {
     return (
-      <EmptyState
-        title="Maintenance"
-        body="You are not an active member of an organization yet, so there are no tickets to show."
-      />
+      <div className="space-y-6">
+        <PageHeader title="Maintenance" />
+        <EmptyState
+          icon={Wrench}
+          title="No organization yet"
+          description="You are not an active member of an organization, so there are no tickets to show. Redeem an invitation and the queue appears here."
+          action={
+            <Button asChild variant="outline">
+              <Link href="/organization/accept">Redeem an invitation</Link>
+            </Button>
+          }
+        />
+      </div>
     );
   }
 
@@ -69,23 +81,21 @@ export default async function MaintenancePage({ searchParams }: { searchParams: 
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {isProvider ? 'My jobs' : 'Maintenance'}
-          </h1>
-          <p className="text-sm text-muted-foreground">{describeScope(membership.role)}</p>
-        </div>
-        {/* Widened to `readonly MemberRole[]`: `TICKET_CREATE_ROLES` is a narrow tuple
-            of three literals, so `.includes()` would reject the five-member union
-            rather than answering it. Narrowing the ARGUMENT is what the shared
-            constant is for; narrowing the predicate's input is a type artefact. */}
-        {(TICKET_CREATE_ROLES as readonly MemberRole[]).includes(membership.role) && (
-          <Button asChild>
-            <Link href="/maintenance/new">Report an issue</Link>
-          </Button>
-        )}
-      </div>
+      <PageHeader
+        title={isProvider ? 'My jobs' : 'Maintenance'}
+        description={describeScope(membership.role)}
+        actions={
+          /* Widened to `readonly MemberRole[]`: `TICKET_CREATE_ROLES` is a narrow tuple
+             of three literals, so `.includes()` would reject the five-member union
+             rather than answering it. Narrowing the ARGUMENT is what the shared
+             constant is for; narrowing the predicate's input is a type artefact. */
+          (TICKET_CREATE_ROLES as readonly MemberRole[]).includes(membership.role) ? (
+            <Button asChild>
+              <Link href="/maintenance/new">Report an issue</Link>
+            </Button>
+          ) : null
+        }
+      />
 
       <Card>
         <CardHeader>
@@ -104,7 +114,14 @@ export default async function MaintenancePage({ searchParams }: { searchParams: 
         </CardContent>
       </Card>
 
-      <TicketTable tickets={tickets} emptyMessage={emptyMessageFor(membership.role)} />
+      <TicketTable
+        tickets={tickets}
+        empty={emptyStateFor({
+          role: membership.role,
+          filtered: Boolean(query.status || query.priority),
+          canCreate: (TICKET_CREATE_ROLES as readonly MemberRole[]).includes(membership.role),
+        })}
+      />
 
       {page.pageInfo.has_more && page.pageInfo.next_cursor && (
         <div className="flex justify-end">
@@ -119,12 +136,62 @@ export default async function MaintenancePage({ searchParams }: { searchParams: 
 
 /* ---------------------------------------------------------------- helpers -- */
 
-function EmptyState({ title, body }: { title: string; body: string }) {
+/**
+ * What "no tickets" means, which is not one thing.
+ *
+ * For a provider an empty queue is the product working — it is the assignment boundary
+ * seen from the inside — and offering them a "report an issue" button would be wrong
+ * twice over, because they also may not create one. For a manager with a filter applied
+ * the useful action is to drop the filter. For a manager with no filter it is to open
+ * the first ticket.
+ */
+function emptyStateFor({
+  role,
+  filtered,
+  canCreate,
+}: {
+  role: string;
+  filtered: boolean;
+  canCreate: boolean;
+}) {
+  if (filtered) {
+    return (
+      <EmptyState
+        icon={SearchX}
+        title="No tickets match this view"
+        description="The filter is applied on the server, so an empty page here means the rows genuinely are not in your scope."
+        action={
+          <Button asChild variant="outline">
+            <Link href="/maintenance">Clear the filters</Link>
+          </Button>
+        }
+      />
+    );
+  }
+
+  if (role === 'service_provider') {
+    return (
+      <EmptyState
+        icon={Wrench}
+        title="No jobs are assigned to you"
+        description="You see work assigned to you and nothing else. Another provider's job is not hidden from this list — it is not reachable from this account at all."
+      />
+    );
+  }
+
   return (
-    <div className="space-y-2">
-      <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-      <p className="text-sm text-muted-foreground">{body}</p>
-    </div>
+    <EmptyState
+      icon={Wrench}
+      title="No tickets yet"
+      description="Maintenance starts when somebody reports a problem. A tenant can raise one themselves, and the assistant will draft the category and priority for a human to confirm."
+      action={
+        canCreate ? (
+          <Button asChild>
+            <Link href="/maintenance/new">Report an issue</Link>
+          </Button>
+        ) : null
+      }
+    />
   );
 }
 
@@ -162,10 +229,4 @@ function describeScope(role: string): string {
     default:
       return 'Every ticket in your organization, and no ticket outside it.';
   }
-}
-
-function emptyMessageFor(role: string): string {
-  return role === 'service_provider'
-    ? 'No jobs are assigned to you.'
-    : 'No tickets match this view.';
 }

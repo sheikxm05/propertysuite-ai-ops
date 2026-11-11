@@ -14,6 +14,7 @@
 import Link from 'next/link';
 
 import { Badge } from '@/components/ui/badge';
+import { expiryVariant } from '@/components/ui/status';
 
 import { resolveViewer } from '@/features/tenants/server/viewer';
 import { listExpiringTenancies } from '@/features/tenancies/server/tenancy-service';
@@ -52,7 +53,9 @@ export async function ExpiringTenanciesPanel() {
                 {formatMoney(tenancy.rent_amount, tenancy.currency)}
               </p>
             </div>
-            <Badge variant={remaining <= 14 ? 'destructive' : 'warning'}>
+            {/* `expiryVariant` is the shared rule: inside the notice window a renewal is
+                an outstanding human decision (amber), at or past due it is urgent (red). */}
+            <Badge variant={expiryVariant(remaining)} className="shrink-0 tabular-nums">
               {remaining <= 0 ? 'Ends today' : `${remaining} days`}
             </Badge>
           </li>

@@ -334,14 +334,58 @@ describe('role-level parity, where the policy name names a role', () => {
     // blind spot is visible rather than implicit.
     if (notInferable.length > 0) {
       console.log(
-        `role-level parity skipped for ${notInferable.length} policy name(s) that ` +
-          `describe a relationship rather than a role:\n  ${notInferable.join('\n  ')}`,
+        `UNMAPPED (role not inferable) — ${notInferable.length} policy name(s) describe ` +
+          'a relationship rather than a role, so role-level parity was NOT evaluated for ' +
+          'them. Their (table, command) parity IS asserted above:\n  ' +
+          notInferable.join('\n  '),
       );
     }
     expect(
       inferable.length,
       'no policy name yielded a role — the suffix map is broken',
     ).toBeGreaterThan(20);
+  });
+
+  it('prints the full parity ledger, including every UNMAPPED entry', () => {
+    // The whole point of the gate is that nothing is silently assumed covered. A cell
+    // this file cannot map has to be VISIBLE on every run, in the ordinary unit job,
+    // or "no failures" quietly comes to mean "no coverage".
+    const unmappedTables = [...new Set(policies.map((p) => p.table))]
+      .filter((t) => TABLE_TO_RESOURCE[t] === undefined)
+      .map((t) => {
+        const count = policies.filter((p) => p.table === t).length;
+        const reason = INTENTIONALLY_UNMAPPED[t] ?? 'NO RECORDED REASON';
+        return `  ${t} (${count} ${count === 1 ? 'policy' : 'policies'}) — ${reason}`;
+      });
+
+    const appCells: string[] = [];
+    for (const type of knownResourceTypes()) {
+      for (const action of ['read', 'create', 'update', 'archive', 'delete'] as const) {
+        const granted = appGrants(type, action);
+        if (granted.length > 0) appCells.push(`${type}.${action} -> [${granted.join(', ')}]`);
+      }
+    }
+
+    console.log(
+      [
+        'CROSS-LAYER PARITY LEDGER (RLS <-> lib/auth/authorize.ts)',
+        `  policies parsed from supabase/migrations : ${policies.length}`,
+        `  policies mapped to a ResourceType        : ${mappedPolicies.length}`,
+        `  non-NONE cells in authorize()            : ${appCells.length}`,
+        `  RPC-mediated grants (no policy expected) : ${Object.keys(RPC_MEDIATED_WRITES).length}`,
+        '',
+        unmappedTables.length === 0
+          ? '  UNMAPPED tables: none'
+          : `  UNMAPPED tables (${unmappedTables.length}) — asserted in NEITHER direction:\n${unmappedTables.join('\n')}`,
+      ].join('\n'),
+    );
+
+    // An unmapped table without a recorded reason is a hole in the gate, not a note.
+    expect(
+      unmappedTables.filter((line) => line.includes('NO RECORDED REASON')),
+      'a policy sits on a table this gate cannot map and nobody wrote down why. Map it ' +
+        'in TABLE_TO_RESOURCE or record the reason in INTENTIONALLY_UNMAPPED.',
+    ).toEqual([]);
   });
 
   for (const policy of inferable) {

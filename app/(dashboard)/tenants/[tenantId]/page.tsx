@@ -20,7 +20,13 @@ import { AuthorizationDeniedError } from '@/lib/auth/authorize';
 import { getTenantById } from '@/features/tenants/server/tenant-service';
 import { resolveViewer } from '@/features/tenants/server/viewer';
 
+import Link from 'next/link';
+import { ShieldOff } from 'lucide-react';
+
+import { PageHeader } from '@/components/shell/page-header';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
 export const metadata = { title: 'Tenant' };
@@ -50,16 +56,21 @@ export default async function TenantDetailPage({
   if (view.kind === 'name_only') {
     return (
       <section className="space-y-6">
-        <header>
-          <h1 className="text-2xl font-semibold tracking-tight">{view.tenant.full_name}</h1>
-          <p className="text-sm text-muted-foreground">
-            You are seeing this tenant because a job is assigned to you.
-          </p>
-        </header>
-        <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-          Contact details are not shared with service providers. Coordinate access through the
-          property manager who assigned the job.
-        </p>
+        <PageHeader
+          eyebrow="Tenant"
+          title={view.tenant.full_name}
+          description="You are seeing this tenant because a job is assigned to you."
+        />
+        <EmptyState
+          icon={ShieldOff}
+          title="Contact details are not shared with service providers"
+          description="The name is all this projection returns — the columns are not withheld by this page, they are never selected. Coordinate access through the property manager who assigned the job."
+          action={
+            <Button asChild variant="outline">
+              <Link href="/maintenance">Back to my jobs</Link>
+            </Button>
+          }
+        />
       </section>
     );
   }
@@ -68,14 +79,26 @@ export default async function TenantDetailPage({
 
   return (
     <section className="space-y-6">
-      <header className="flex flex-wrap items-center justify-between gap-4">
-        <h1 className="text-2xl font-semibold tracking-tight">{tenant.full_name}</h1>
-        {tenant.profile_id ? (
-          <Badge variant="success">Account linked</Badge>
-        ) : (
-          <Badge variant="secondary">No account yet</Badge>
-        )}
-      </header>
+      <PageHeader
+        eyebrow={
+          <Link href="/tenants" className="underline-offset-4 hover:underline">
+            Tenants
+          </Link>
+        }
+        title={tenant.full_name}
+        description="Personal contact details. Visible to organization administrators and property managers, and to this tenant themselves."
+        actions={
+          tenant.profile_id ? (
+            <Badge variant="success" className="whitespace-nowrap">
+              Account linked
+            </Badge>
+          ) : (
+            <Badge variant="secondary" className="whitespace-nowrap">
+              No account yet
+            </Badge>
+          )
+        }
+      />
 
       <Card>
         <CardHeader>

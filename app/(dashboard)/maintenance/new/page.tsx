@@ -15,8 +15,11 @@
  */
 
 import Link from 'next/link';
+import { ShieldOff } from 'lucide-react';
 
+import { PageHeader } from '@/components/shell/page-header';
 import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
 import { TICKET_CREATE_ROLES, type MemberRole } from '@shared/index';
 import { CreateTicketForm } from '@/features/maintenance/components/create-ticket-form';
 import { listReportableUnits } from '@/features/maintenance/domain';
@@ -31,15 +34,18 @@ export default async function NewTicketPage() {
   // three-literal tuple, and `.includes()` must be asked about the full role union.
   if (!membership || !(TICKET_CREATE_ROLES as readonly MemberRole[]).includes(membership.role)) {
     return (
-      <div className="space-y-4">
-        <h1 className="text-2xl font-semibold tracking-tight">Report an issue</h1>
-        <p className="text-sm text-muted-foreground">
-          Your role cannot raise maintenance tickets. A tenant reports an issue on a unit they
-          lease, and a manager can raise one on a tenant&apos;s behalf.
-        </p>
-        <Button asChild variant="secondary">
-          <Link href="/maintenance">Back to maintenance</Link>
-        </Button>
+      <div className="space-y-6">
+        <PageHeader eyebrow="Maintenance" title="Report an issue" />
+        <EmptyState
+          icon={ShieldOff}
+          title="Your role cannot raise maintenance tickets"
+          description="A tenant reports an issue on a unit they lease, and a manager can raise one on a tenant's behalf. The refusal is enforced in the service and in Postgres, not by hiding this page."
+          action={
+            <Button asChild variant="outline">
+              <Link href="/maintenance">Back to maintenance</Link>
+            </Button>
+          }
+        />
       </div>
     );
   }
@@ -48,13 +54,16 @@ export default async function NewTicketPage() {
 
   return (
     <div className="max-w-2xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Report an issue</h1>
-        <p className="text-sm text-muted-foreground">
-          The ticket is created in the <code>open</code> state. A manager triages it and assigns a
-          provider.
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Maintenance"
+        title="Report an issue"
+        description="The ticket is created in the open state. A manager triages it and assigns a provider."
+        actions={
+          <Button asChild variant="outline">
+            <Link href="/maintenance">Cancel</Link>
+          </Button>
+        }
+      />
       <CreateTicketForm units={units} />
     </div>
   );

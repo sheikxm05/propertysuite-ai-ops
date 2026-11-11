@@ -90,9 +90,25 @@ export default defineConfig(async (): Promise<UserConfig> => {
       fileParallelism: !rlsRequested,
       sequence: { concurrent: false },
 
-      // Seeding two organizations through real HTTP calls is slow; assertions are not.
-      testTimeout: rlsRequested ? 60_000 : 10_000,
-      hookTimeout: rlsRequested ? 180_000 : 20_000,
+      // The RLS suite is LATENCY-bound, not CPU-bound, and the budget has to be sized
+      // for that or the gate starts measuring the network instead of the policies.
+      //
+      // Measured against the live Supavisor pooler: a single round trip costs
+      // 0.4-2.2 s, and occasionally stalls for ~20 s when the pooler queues. Most
+      // assertions are one round trip and finish well inside a second, but three of them
+      // sweep a whole dimension in one `it` — "filtering by the other organization_id
+      // returns nothing, for every role" is 2 organizations x 5 roles x 14 tables = 140
+      // sequential round trips, which measured 60.0 s against a 60 s budget and failed
+      // as a timeout. A timeout reads exactly like an isolation failure in the report
+      // and is not one; that is the worst possible thing for this suite to emit.
+      //
+      // 300 s is deliberately generous. Nothing is being hidden by it: `psql.ts` gives
+      // up on an unanswered batch at 120 s, and every statement carries
+      // `set local statement_timeout = '30s'`, so a genuinely hung query still fails
+      // the case. This ceiling only stops a slow NETWORK from being reported as a
+      // policy defect.
+      testTimeout: rlsRequested ? 300_000 : 10_000,
+      hookTimeout: rlsRequested ? 300_000 : 20_000,
 
       // Resolves credentials, verifies the stack is reachable, seeds the fixtures, and on
       // teardown writes the policy-coverage report and fails the run if any policy in the

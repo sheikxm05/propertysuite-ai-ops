@@ -9,6 +9,9 @@
  * The confirmation therefore arrives in the action's `message` field with the
  * non-destructive variant — the same channel an error uses, because to this page they
  * are the same event.
+ *
+ * The field lives in `components/forgot-password-form.tsx`, a Client Component — see the
+ * header of `components/sign-up-form.tsx` for why that is a correctness requirement.
  */
 
 import Link from 'next/link';
@@ -21,11 +24,8 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import { FormControl, FormField, FormLabel, FormMessage } from '@/components/ui/form';
-import { Input } from '@/components/ui/input';
 
-import { requestPasswordReset } from '../actions';
-import { ActionForm } from '../components/action-form';
+import { ForgotPasswordForm } from '../components/forgot-password-form';
 
 export const metadata = { title: 'Reset your password' };
 
@@ -38,20 +38,7 @@ export default function ForgotPasswordPage() {
       </CardHeader>
 
       <CardContent>
-        <ActionForm
-          action={requestPasswordReset}
-          submitLabel="Send reset link"
-          pendingLabel="Sending…"
-          messageVariant="default"
-        >
-          <FormField name="email">
-            <FormLabel>Email address</FormLabel>
-            <FormControl>
-              <Input type="email" autoComplete="email" autoFocus required />
-            </FormControl>
-            <FormMessage />
-          </FormField>
-        </ActionForm>
+        <ForgotPasswordForm />
       </CardContent>
 
       <CardFooter className="text-sm text-muted-foreground">

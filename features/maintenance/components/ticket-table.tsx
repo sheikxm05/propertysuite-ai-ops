@@ -14,9 +14,11 @@
  * an email it was handed.
  */
 
+import * as React from 'react';
 import Link from 'next/link';
 
 import { Badge } from '@/components/ui/badge';
+import { TICKET_PRIORITY_STYLE, TICKET_STATUS_STYLE, styleFor } from '@/components/ui/status';
 import {
   Table,
   TableBody,
@@ -37,28 +39,30 @@ import { PriorityBadge, StatusBadge } from './badges';
 
 export interface TicketTableProps {
   tickets: readonly Ticket[];
-  /** Rendered when the page is empty, which for a provider is the common case. */
-  emptyMessage: string;
+  /**
+   * Rendered when the page is empty, which for a provider is the common case — and for
+   * a provider it is also the correct answer rather than a gap, so the page composes the
+   * whole state and this component only decides where to put it.
+   */
+  empty: React.ReactNode;
 }
 
-export function TicketTable({ tickets, emptyMessage }: TicketTableProps) {
-  if (tickets.length === 0) {
-    return (
-      <p className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
-        {emptyMessage}
-      </p>
-    );
-  }
+export function TicketTable({ tickets, empty }: TicketTableProps) {
+  if (tickets.length === 0) return <>{empty}</>;
 
   return (
     <Table>
       <TableHeader>
         <TableRow>
           <TableHead>Title</TableHead>
-          <TableHead>Category</TableHead>
+          {/* Category folds away below `md`. Priority and status never do: they are the
+              two columns somebody triaging a queue is actually scanning. */}
+          <TableHead className="hidden md:table-cell">Category</TableHead>
           <TableHead>Priority</TableHead>
           <TableHead>Status</TableHead>
-          <TableHead>Reported</TableHead>
+          <TableHead numeric className="hidden sm:table-cell">
+            Reported
+          </TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -72,7 +76,7 @@ export function TicketTable({ tickets, emptyMessage }: TicketTableProps) {
                 {ticket.title}
               </Link>
             </TableCell>
-            <TableCell>
+            <TableCell className="hidden md:table-cell">
               <span className="text-sm text-muted-foreground">
                 {MAINTENANCE_CATEGORY_LABELS[ticket.category]}
               </span>
@@ -83,7 +87,10 @@ export function TicketTable({ tickets, emptyMessage }: TicketTableProps) {
             <TableCell>
               <StatusBadge status={ticket.status} />
             </TableCell>
-            <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
+            <TableCell
+              numeric
+              className="hidden whitespace-nowrap text-sm text-muted-foreground sm:table-cell"
+            >
               {formatDate(ticket.created_at)}
             </TableCell>
           </TableRow>
@@ -150,13 +157,26 @@ function FacetRow(props: {
       </Link>
       {options.map((option) => (
         <Link key={option} href={facetHref(props, param, option)}>
+          {/*
+            The facet label is the same string the chip in the table uses — it used to be
+            `option.replace(/_/g, ' ')`, so the filter read "awaiting approval" while the
+            row it selected read "Awaiting approval". The variant stays `default` /
+            `outline` because this chip means "selected", not "this status is amber".
+          */}
           <Badge variant={active === option ? 'default' : 'outline'}>
-            {option.replace(/_/g, ' ')}
+            {facetLabel(param, option)}
           </Badge>
         </Link>
       ))}
     </div>
   );
+}
+
+/** The chip label for a facet option, taken from the same table the rows use. */
+function facetLabel(param: 'status' | 'priority', option: string): string {
+  return param === 'status'
+    ? styleFor(TICKET_STATUS_STYLE, option).label
+    : styleFor(TICKET_PRIORITY_STYLE, option).label;
 }
 
 /**

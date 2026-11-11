@@ -41,6 +41,8 @@ function AiIntakeWidget(_props: DashboardWidgetProps) {
 }
 
 export const widget: DashboardWidget = {
+  // This widget draws its own <Card>; the dashboard must not wrap it again.
+  chrome: 'none',
   key: 'ai-intake',
   title: 'Report an issue',
   roles: ['tenant'],

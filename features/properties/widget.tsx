@@ -91,6 +91,8 @@ function Metric({ label, value }: { label: string; value: string }) {
  * five role dashboards.
  */
 export const widget: DashboardWidget = {
+  // This widget draws its own <Card>; the dashboard must not wrap it again.
+  chrome: 'none',
   key: 'properties',
   title: 'Portfolio',
   roles: ['organization_admin', 'property_manager', 'property_owner'],

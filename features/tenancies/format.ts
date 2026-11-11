@@ -11,6 +11,7 @@
  * monetary value is allowed to become a float: no arithmetic happens afterwards.
  */
 
+import { TENANCY_STATUS_STYLE, type StatusVariant } from '@/components/ui/status';
 import { DEFAULT_CURRENCY, DEFAULT_LOCALE, type TenancyStatus } from '@shared/index';
 
 /** `"120000.00"`, `"AED"` → `"AED 120,000.00"`. */
@@ -54,23 +55,17 @@ export function daysBetween(from: string, to: string): number {
   return Math.round((end - start) / 86_400_000);
 }
 
-/** Badge variant per lifecycle state. Semantic names only — no colours at a call site. */
-export function tenancyStatusTone(
-  status: TenancyStatus,
-): 'default' | 'secondary' | 'destructive' | 'success' | 'warning' | 'outline' {
-  switch (status) {
-    case 'active':
-      return 'success';
-    case 'draft':
-      return 'secondary';
-    case 'expired':
-      return 'warning';
-    case 'terminated':
-      return 'destructive';
-  }
+/**
+ * Badge variant per lifecycle state, delegated to `components/ui/status.ts` — the one
+ * table that decides what each colour means across every surface in the product. The
+ * mapping it holds is the one this function used to compute; the point of moving it is
+ * that `expired` can no longer be amber here and grey on a dashboard tile.
+ */
+export function tenancyStatusTone(status: TenancyStatus): StatusVariant {
+  return TENANCY_STATUS_STYLE[status].variant;
 }
 
 /** Human label for a lifecycle state. */
 export function tenancyStatusLabel(status: TenancyStatus): string {
-  return status.charAt(0).toUpperCase() + status.slice(1);
+  return TENANCY_STATUS_STYLE[status].label;
 }

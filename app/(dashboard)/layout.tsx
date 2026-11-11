@@ -42,16 +42,20 @@ export default async function DashboardLayout({ children }: { children: React.Re
     <div className="flex min-h-screen">
       <Sidebar role={role} organizationName={organizationName} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <Topbar role={role} displayName={displayName} />
         {/*
-          Sign-out lives here rather than in `components/shell/topbar.tsx`, which is
-          w0-l1's file and not this lane's to edit. Reported as a planning defect: the
-          shell has no slot for an account control.
+          Sign-out is passed in rather than owned by the shell: signing out is a server
+          action in this feature's lane, and the top bar must not import from `features/`.
+          `accountActions` is the slot that resolves that — the stray sign-out strip that
+          used to sit under the top bar is gone.
         */}
-        <div className="flex items-center justify-end border-b bg-background px-4 py-2">
-          <SignOutButton />
-        </div>
-        <main className="flex-1 p-6">{children}</main>
+        <Topbar
+          role={role}
+          displayName={displayName}
+          email={session.email}
+          organizationName={organizationName}
+          accountActions={<SignOutButton />}
+        />
+        <main className="page-gutter flex-1 py-6">{children}</main>
       </div>
       <Toaster />
     </div>

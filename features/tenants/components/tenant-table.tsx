@@ -9,8 +9,11 @@
  */
 
 import Link from 'next/link';
+import { SearchX, Users } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
 import {
   Table,
   TableBody,
@@ -21,12 +24,37 @@ import {
 } from '@/components/ui/table';
 import type { Tenant } from '@shared/index';
 
-export function TenantTable({ tenants }: { tenants: readonly Tenant[] }) {
+export function TenantTable({
+  tenants,
+  filtered = false,
+}: {
+  tenants: readonly Tenant[];
+  /** Whether a search term is applied, which changes what "empty" means and what to offer. */
+  filtered?: boolean;
+}) {
   if (tenants.length === 0) {
-    return (
-      <p className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
-        No tenant records match.
-      </p>
+    return filtered ? (
+      <EmptyState
+        icon={SearchX}
+        title="No tenant records match"
+        description="Search matches the recorded full name. Clear the box to see the whole directory."
+        action={
+          <Button asChild variant="outline">
+            <Link href="/tenants">Clear the search</Link>
+          </Button>
+        }
+      />
+    ) : (
+      <EmptyState
+        icon={Users}
+        title="No tenant records yet"
+        description="A tenant record is created alongside the tenancy that names it, so start from the lease."
+        action={
+          <Button asChild variant="outline">
+            <Link href="/tenancies">Open the tenancy register</Link>
+          </Button>
+        }
+      />
     );
   }
 
@@ -35,8 +63,10 @@ export function TenantTable({ tenants }: { tenants: readonly Tenant[] }) {
       <TableHeader>
         <TableRow>
           <TableHead>Name</TableHead>
-          <TableHead>Email</TableHead>
-          <TableHead>Phone</TableHead>
+          <TableHead className="hidden sm:table-cell">Email</TableHead>
+          <TableHead numeric className="hidden md:table-cell">
+            Phone
+          </TableHead>
           <TableHead>Account</TableHead>
         </TableRow>
       </TableHeader>
@@ -48,13 +78,28 @@ export function TenantTable({ tenants }: { tenants: readonly Tenant[] }) {
                 {tenant.full_name}
               </Link>
             </TableCell>
-            <TableCell className="text-muted-foreground">{tenant.email ?? '—'}</TableCell>
-            <TableCell className="text-muted-foreground">{tenant.phone ?? '—'}</TableCell>
+            <TableCell className="hidden text-muted-foreground sm:table-cell">
+              {tenant.email ?? '—'}
+            </TableCell>
+            <TableCell numeric className="hidden text-muted-foreground md:table-cell">
+              {tenant.phone ?? '—'}
+            </TableCell>
             <TableCell>
+              {/*
+                `success` for a linked account and `secondary` for one that does not exist
+                yet, which is the same rule `components/ui/status.ts` applies to every
+                other status in the product: green is a settled good state, grey is
+                "not started". There is no shared table for this one because it is not a
+                column — it is whether `tenants.profile_id` is populated.
+              */}
               {tenant.profile_id ? (
-                <Badge variant="success">Linked</Badge>
+                <Badge variant="success" className="whitespace-nowrap">
+                  Linked
+                </Badge>
               ) : (
-                <Badge variant="secondary">No account</Badge>
+                <Badge variant="secondary" className="whitespace-nowrap">
+                  No account
+                </Badge>
               )}
             </TableCell>
           </TableRow>

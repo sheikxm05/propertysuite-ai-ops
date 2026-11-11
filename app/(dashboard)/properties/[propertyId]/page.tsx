@@ -14,6 +14,8 @@
 
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
+
+import { PageHeader } from '@/components/shell/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -78,33 +80,32 @@ export default async function PropertyDetailPage({ params, searchParams }: PageP
 
   return (
     <div className="space-y-6">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <nav aria-label="Breadcrumb" className="mb-1 text-sm text-muted-foreground">
-            <Link href="/properties" className="underline-offset-4 hover:underline">
-              Properties
-            </Link>
-          </nav>
-          <h1 className="flex items-center gap-3 text-2xl font-semibold">
+      <PageHeader
+        eyebrow={
+          <Link href="/properties" className="underline-offset-4 hover:underline">
+            Properties
+          </Link>
+        }
+        title={
+          <span className="flex flex-wrap items-center gap-3">
             {property.name}
-            <Badge variant={propertyStatusVariant(property.status)}>
+            <Badge variant={propertyStatusVariant(property.status)} className="whitespace-nowrap">
               {propertyStatusLabel(property.status)}
             </Badge>
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {property.address_line}, {property.city}, {property.emirate}
-          </p>
-        </div>
-
-        {canWrite ? (
-          <div className="flex items-center gap-2">
-            <Button asChild variant="outline" size="sm">
-              <Link href={`/properties/${property.id}/edit`}>Edit</Link>
-            </Button>
-            <ArchiveButton propertyId={property.id} status={property.status} />
-          </div>
-        ) : null}
-      </header>
+          </span>
+        }
+        description={`${property.address_line}, ${property.city}, ${property.emirate}`}
+        actions={
+          canWrite ? (
+            <>
+              <Button asChild variant="outline" size="sm">
+                <Link href={`/properties/${property.id}/edit`}>Edit</Link>
+              </Button>
+              <ArchiveButton propertyId={property.id} status={property.status} />
+            </>
+          ) : null
+        }
+      />
 
       <Card>
         <CardHeader>

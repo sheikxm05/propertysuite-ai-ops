@@ -19,9 +19,13 @@
  */
 
 import Link from 'next/link';
+import { Building2, SearchX } from 'lucide-react';
+
+import { PageHeader } from '@/components/shell/page-header';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
 import { CursorNav } from '@/features/properties/cursor-nav';
 import { ListControls } from '@/features/properties/list-controls';
 import { firstParam, resolvePageContext } from '@/features/properties/page-data';
@@ -57,22 +61,21 @@ export default async function PropertiesPage({ searchParams }: { searchParams: S
 
   return (
     <div className="space-y-6">
-      <header className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold">Properties</h1>
-          <p className="text-sm text-muted-foreground">
-            {context.canWrite
-              ? 'Every property in your organization.'
-              : 'The properties you are authorized to see.'}
-          </p>
-        </div>
-
-        {context.canWrite ? (
-          <Button asChild>
-            <Link href="/properties/new">New property</Link>
-          </Button>
-        ) : null}
-      </header>
+      <PageHeader
+        title="Properties"
+        description={
+          context.canWrite
+            ? 'Every property in your organization.'
+            : 'The properties you are authorized to see.'
+        }
+        actions={
+          context.canWrite ? (
+            <Button asChild>
+              <Link href="/properties/new">New property</Link>
+            </Button>
+          ) : null
+        }
+      />
 
       {parsed.success ? null : (
         <Alert variant="destructive">
@@ -96,18 +99,64 @@ export default async function PropertiesPage({ searchParams }: { searchParams: S
         <CardContent className="pt-6">
           <PropertyTable
             properties={page.rows}
-            emptyMessage={
-              query.q || query.status
-                ? 'No properties match these filters.'
-                : context.canWrite
-                  ? 'No properties yet. Create the first one to get started.'
-                  : 'No properties are visible to you.'
-            }
+            empty={emptyStateFor({
+              filtered: Boolean(query.q || query.status),
+              canWrite: context.canWrite,
+            })}
           />
           <CursorNav param="cursor" nextCursor={page.nextCursor} count={page.rows.length} />
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/**
+ * The three reasons this list can be empty, said in three different ways.
+ *
+ * "No rows" is the same sentence for a filter that matched nothing, an organization that
+ * has not started yet, and an authorization boundary doing its job — and those need
+ * different next actions, or none at all. The third case is the interesting one: for a
+ * tenant or a provider an empty portfolio is the correct answer, so it offers no action
+ * and says why rather than implying something is missing.
+ */
+function emptyStateFor({ filtered, canWrite }: { filtered: boolean; canWrite: boolean }) {
+  if (filtered) {
+    return (
+      <EmptyState
+        icon={SearchX}
+        title="No properties match these filters"
+        description="Clear the search box or choose a different status to widen the list."
+        action={
+          <Button asChild variant="outline">
+            <Link href="/properties">Clear filters</Link>
+          </Button>
+        }
+      />
+    );
+  }
+
+  if (canWrite) {
+    return (
+      <EmptyState
+        icon={Building2}
+        title="No properties yet"
+        description="Add the first building or unit and the portfolio, tenancies and maintenance queues all hang off it."
+        action={
+          <Button asChild>
+            <Link href="/properties/new">New property</Link>
+          </Button>
+        }
+      />
+    );
+  }
+
+  return (
+    <EmptyState
+      icon={Building2}
+      title="No properties are visible to you"
+      description="Your role sees only the properties it is connected to — a lease you hold, or a job assigned to you. An empty list here is the boundary working, not a missing record."
+    />
   );
 }
 
@@ -118,12 +167,25 @@ export default async function PropertiesPage({ searchParams }: { searchParams: S
  */
 function NoMembership() {
   return (
-    <Alert>
-      <AlertTitle>No organization yet</AlertTitle>
-      <AlertDescription>
-        Your account is not an active member of an organization, so there are no properties to show.
-        Accept an invitation, or ask an administrator to add you.
-      </AlertDescription>
-    </Alert>
+    <div className="space-y-6">
+      <PageHeader title="Properties" />
+      <Alert>
+        <AlertTitle>No organization yet</AlertTitle>
+        <AlertDescription>
+          Your account is not an active member of an organization, so there are no properties to
+          show. Accept an invitation, or ask an administrator to add you.
+        </AlertDescription>
+      </Alert>
+      <EmptyState
+        icon={Building2}
+        title="Nothing to show yet"
+        description="Join an organization and its portfolio appears here."
+        action={
+          <Button asChild variant="outline">
+            <Link href="/organization/accept">Redeem an invitation</Link>
+          </Button>
+        }
+      />
+    </div>
   );
 }

@@ -21,12 +21,15 @@
  */
 
 import Link from 'next/link';
-import { Ticket } from 'lucide-react';
+import { MailPlus, Ticket } from 'lucide-react';
 
+import { PageHeader } from '@/components/shell/page-header';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
+import { type StatusVariant } from '@/components/ui/status';
 import {
   Table,
   TableBody,
@@ -44,11 +47,18 @@ import { MEMBER_ROLE_LABELS, type Invitation, type InvitationStatus } from '@sha
 
 export const metadata = { title: 'Organization' };
 
-/** Visual weight per invitation state. Presentation only. */
-const STATUS_VARIANT: Record<InvitationStatus, 'warning' | 'success' | 'secondary'> = {
+/**
+ * Visual weight per invitation state.
+ *
+ * `components/ui/status.ts` holds the mapping for every status that is a column on a
+ * tenant-scoped table; `organization_invitations.status` is not one of its seven, so the
+ * table lives here — but it follows the same rule rather than inventing one: amber while
+ * a human still has to act, green once they have, and inert grey once it is spent.
+ */
+const STATUS_VARIANT: Record<InvitationStatus, StatusVariant> = {
   pending: 'warning',
   accepted: 'success',
-  revoked: 'secondary',
+  revoked: 'outline',
 };
 
 export default async function OrganizationPage() {
@@ -57,10 +67,10 @@ export default async function OrganizationPage() {
   if (!membership) {
     return (
       <div className="space-y-6">
-        <header>
-          <h1 className="text-2xl font-semibold tracking-tight">Organization</h1>
-          <p className="text-sm text-muted-foreground">You do not belong to an organization yet.</p>
-        </header>
+        <PageHeader
+          title="Organization"
+          description="You do not belong to an organization yet. Create one and become its administrator, or redeem the invitation an administrator sent you."
+        />
         <OnboardingPanel />
       </div>
     );
@@ -77,25 +87,27 @@ export default async function OrganizationPage() {
 
   return (
     <div className="space-y-6">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{summary.name}</h1>
-          <p className="text-sm text-muted-foreground">
-            {summary.slug} · you are {MEMBER_ROLE_LABELS[summary.role].toLowerCase()}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Badge variant={summary.status === 'active' ? 'success' : 'destructive'}>
-            {summary.status}
-          </Badge>
-          <Button asChild variant="outline" size="sm">
-            <Link href="/organization/accept">
-              <Ticket aria-hidden="true" />
-              Redeem an invitation
-            </Link>
-          </Button>
-        </div>
-      </header>
+      <PageHeader
+        eyebrow="Organization"
+        title={summary.name}
+        description={`${summary.slug} · you are ${MEMBER_ROLE_LABELS[summary.role].toLowerCase()}`}
+        actions={
+          <>
+            <Badge
+              variant={summary.status === 'active' ? 'success' : 'destructive'}
+              className="whitespace-nowrap"
+            >
+              {summary.status}
+            </Badge>
+            <Button asChild variant="outline" size="sm">
+              <Link href="/organization/accept">
+                <Ticket aria-hidden="true" />
+                Redeem an invitation
+              </Link>
+            </Button>
+          </>
+        }
+      />
 
       <div className="grid gap-4 sm:grid-cols-3">
         <Stat label="Active members" value={summary.activeMembers} />
@@ -136,32 +148,46 @@ export default async function OrganizationPage() {
             </CardHeader>
             <CardContent>
               {invitations.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No invitations yet.</p>
+                <EmptyState
+                  icon={MailPlus}
+                  title="No invitations yet"
+                  description="Invite somebody with the form above. The token appears once, you hand it over yourself, and only its hash is stored."
+                />
               ) : (
                 <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead>Email</TableHead>
-                      <TableHead>Role</TableHead>
+                      <TableHead className="hidden md:table-cell">Role</TableHead>
                       <TableHead>Status</TableHead>
-                      <TableHead>Expires</TableHead>
-                      <TableHead className="text-right">Action</TableHead>
+                      <TableHead numeric className="hidden sm:table-cell">
+                        Expires
+                      </TableHead>
+                      <TableHead numeric>Action</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {invitations.map((invitation) => (
                       <TableRow key={invitation.id}>
                         <TableCell className="font-medium">{invitation.email}</TableCell>
-                        <TableCell>{MEMBER_ROLE_LABELS[invitation.role]}</TableCell>
+                        <TableCell className="hidden md:table-cell">
+                          {MEMBER_ROLE_LABELS[invitation.role]}
+                        </TableCell>
                         <TableCell>
-                          <Badge variant={STATUS_VARIANT[invitation.status]}>
+                          <Badge
+                            variant={STATUS_VARIANT[invitation.status]}
+                            className="whitespace-nowrap"
+                          >
                             {invitation.status}
                           </Badge>
                         </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
+                        <TableCell
+                          numeric
+                          className="hidden text-sm text-muted-foreground sm:table-cell"
+                        >
                           {new Date(invitation.expires_at).toLocaleDateString('en-AE')}
                         </TableCell>
-                        <TableCell className="text-right">
+                        <TableCell numeric>
                           {invitation.status === 'pending' ? (
                             <RevokeInvitationButton
                               invitationId={invitation.id}
@@ -194,7 +220,7 @@ function Stat({ label, value, text }: { label: string; value?: number | null; te
     <Card>
       <CardContent className="pt-6">
         <p className="text-xs uppercase tracking-wide text-muted-foreground">{label}</p>
-        <p className="text-2xl font-semibold">
+        <p className="numeric text-2xl font-semibold">
           {text ?? (value === null || value === undefined ? '—' : value)}
         </p>
       </CardContent>

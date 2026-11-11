@@ -13,22 +13,24 @@
  */
 
 /**
- * ORCHESTRATOR (w-pre), build fix: the auth segment is rendered per request, never
- * statically generated.
+ * `export const dynamic = 'force-dynamic'` used to sit here. It is gone, deliberately.
  *
- * Two reasons, the second of which is the one that matters:
- *  1. These pages are session-dependent. `middleware.ts` redirects a signed-in visitor
- *     away from /sign-in, /sign-up and /forgot-password, so a statically generated copy
- *     is the wrong artefact to serve.
- *  2. Prerendering /sign-up failed at build time with
- *     `TypeError: Cannot read properties of undefined (reading 'name')`, while the same
- *     page returns HTTP 200 from the dev server — i.e. the runtime path is fine and only
- *     static generation breaks. Forcing dynamic uses exactly the path dev exercises.
+ * It was added to get past a build-time
+ * `TypeError: Cannot read properties of undefined (reading 'name')` while prerendering
+ * /sign-up, and its own comment said the cause was undiagnosed. It did not fix anything:
+ * it moved a build failure to a runtime one, and /sign-up served a live HTTP 500.
  *
- * The underlying prerender incompatibility (client form primitives + useActionState) is
- * NOT diagnosed, only avoided. Recorded as an open item rather than claimed as fixed.
+ * The cause is now diagnosed and fixed at the source — every form body under this group
+ * is a Client Component, so no form element crosses the Flight boundary for
+ * `FormControl` to clone. See `components/sign-up-form.tsx` for the full account.
+ *
+ * Nothing here is session-dependent: `middleware.ts` redirects a signed-in visitor away
+ * before any of these pages render, so a prerendered copy is the correct artefact and
+ * the gate still runs on every request. /sign-in opts itself into dynamic rendering by
+ * awaiting `searchParams`; the other three prerender, which is what the build output
+ * should show. Forcing the whole segment dynamic again would hide a regression of
+ * exactly this bug rather than surface it.
  */
-export const dynamic = 'force-dynamic';
 
 import Link from 'next/link';
 import { ShieldCheck } from 'lucide-react';

@@ -16,6 +16,7 @@
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
+  PsqlSession,
   SERVICE_ROLE_ONLY_TABLES,
   TENANT_SCOPED_TABLES,
   clientFor,
@@ -26,7 +27,9 @@ import {
   getWorld,
   isAuthorizationRefusal,
   org as orgFixture,
+  quote,
   recordPass,
+  resolvePostgresConnection,
   type World,
 } from '../_harness';
 import type { MemberRole } from '../_harness';
@@ -159,26 +162,118 @@ describe('maintenance_activities is immutable', () => {
     recordPass({ dimension: 'integrity', label: 'maintenance_activities immutable to all roles' });
   });
 
-  it('TRUNCATE is refused, even though the privilege was never revoked', async (ctx) => {
-    // Found by running the migrations against a real instance, not by reading them.
+  it('TRUNCATE is revoked from authenticated and anon on every table in the registry', async (ctx) => {
+    // Finding 11, asserted at the PRIVILEGE level rather than by attempting the
+    // statement.
     //
-    // 0002 revoked UPDATE and DELETE on maintenance_activities from `authenticated`,
-    // which is what finding 6 asked for. It did not revoke TRUNCATE — and Supabase's
-    // default grants hand `authenticated` every privilege on a new table, so the
-    // privilege is still there:
+    // The original defect: Supabase's default grants hand `authenticated` ALL
+    // privileges on a new table, and "all" includes TRUNCATE. TRUNCATE ignores row
+    // level security completely — it does not examine rows, so no policy can filter
+    // it. A principal with no membership in any organization truncated `audit_logs`
+    // to zero rows. 0002 §4a closes it with a revoke loop over every table in
+    // `public`, plus a revoke on the default privileges so a table created later does
+    // not reopen the hole.
     //
-    //   has_table_privilege('authenticated','public.maintenance_activities','TRUNCATE')
-    //     -> true
-    //   has_table_privilege('authenticated','public.maintenance_activities','UPDATE')
-    //     -> false
+    // Why `has_table_privilege` and not "try it and see it fail": an attempt that
+    // fails proves only that THIS statement was refused, and a trigger (0003's
+    // `maintenance_activities_block_truncate`) would make it fail even if the grant
+    // were still there. The privilege check is the direct question, and the
+    // three-argument form reports the EFFECTIVE privilege — a grant inherited through
+    // PUBLIC, or through a role `authenticated` is a member of, counts as held. A
+    // hand-written `pg_class.relacl` scan would miss both.
     //
-    // TRUNCATE also bypasses RLS entirely: policies filter rows, and TRUNCATE does not
-    // look at rows. So no policy could have stopped it. The only thing standing between
-    // a client and the entire activity history of the organization is 0003's
-    // `maintenance_activities_block_truncate` trigger, which fires on TRUNCATE and
-    // raises. It fails closed, which is why this is a test rather than a defect — but
-    // it fails closed on a trigger rather than on a privilege, so it is asserted
-    // explicitly and by name.
+    // Asked while impersonating `authenticated`, for the same reason every other
+    // assertion is: a result produced as the table owner proves nothing about what a
+    // client can do. The role is also named explicitly in the call, so the answer does
+    // not depend on who is asking.
+    //
+    // psql-only: PostgREST has no way to ask a catalog function this.
+    if (world.driver.name !== 'pg') {
+      ctx.skip();
+      return;
+    }
+
+    const tables = [...TENANT_SCOPED_TABLES, ...SERVICE_ROLE_ONLY_TABLES];
+    const session = new PsqlSession(resolvePostgresConnection());
+
+    try {
+      const out = await session.run(
+        [
+          'begin',
+          "set local statement_timeout = '30s'",
+          'set local role authenticated',
+          `select '__RESULT__' || jsonb_build_object(
+             'acting_as', current_user,
+             'rows', (
+               select jsonb_agg(
+                 jsonb_build_object(
+                   'table', t,
+                   'authenticated', has_table_privilege('authenticated', 'public.' || t, 'TRUNCATE'),
+                   'anon', has_table_privilege('anon', 'public.' || t, 'TRUNCATE')
+                 ) order by t)
+               from unnest(array[${tables.map((t) => quote(t)).join(', ')}]) t
+             ))::text`,
+          'reset role',
+          'rollback',
+        ].join('\n\\;\n'),
+      );
+
+      expect(
+        out.payload,
+        `the privilege probe returned no payload: ${(out.stderr || out.stdout).slice(0, 400)}`,
+      ).toBeDefined();
+
+      const parsed = JSON.parse(String(out.payload)) as {
+        acting_as: string;
+        rows: { table: string; authenticated: boolean; anon: boolean }[] | null;
+      };
+
+      // Without this the whole case is worthless: as the table owner the answer would
+      // be about a different role entirely.
+      expect(parsed.acting_as, 'the probe did not run as `authenticated`').toBe('authenticated');
+
+      const rows = parsed.rows ?? [];
+      expect(
+        rows.map((r) => r.table).sort(),
+        'the privilege sweep must cover every table the registry knows about',
+      ).toEqual([...tables].sort());
+
+      const held = rows
+        .filter((r) => r.authenticated || r.anon)
+        .map(
+          (r) =>
+            `public.${r.table}: authenticated=${String(r.authenticated)} anon=${String(r.anon)}`,
+        );
+
+      expect(
+        held,
+        'TRUNCATE is still granted on the table(s) above. TRUNCATE BYPASSES ROW LEVEL ' +
+          'SECURITY ENTIRELY — it does not look at rows, so no policy can stop it, and ' +
+          'a principal with no membership in any organization can empty the table for ' +
+          'every tenant at once. Re-run the revoke loop in migration 0002 §4a; a table ' +
+          'created by a later migration inherits the privilege unless that loop is run ' +
+          'again.',
+      ).toEqual([]);
+
+      recordPass({
+        dimension: 'integrity',
+        label: `TRUNCATE revoked from authenticated and anon on ${rows.length} tables`,
+      });
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('TRUNCATE on the activity history is refused by the trigger as well', async (ctx) => {
+    // Defence in depth over the revoke asserted above. The privilege is gone, but the
+    // activity history is the evidence of every state change in the system, so it is
+    // also protected by 0003's `maintenance_activities_block_truncate` trigger — which
+    // binds the table owner and the service role too, where a revoke does not.
+    //
+    // Both layers are asserted because they fail for different reasons and can be
+    // removed independently: a later migration that creates a table without re-running
+    // the §4a revoke loop reopens the privilege, and a dropped trigger reopens the
+    // owner-side path. Either alone would still leave this case green.
     //
     // PostgREST has no TRUNCATE verb, so this is only reachable on the pg driver; the
     // supabase driver reports it unsupported and the case is skipped rather than

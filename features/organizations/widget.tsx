@@ -107,6 +107,8 @@ async function OrganizationWidget({ role }: DashboardWidgetProps) {
 }
 
 export const widget: DashboardWidget = {
+  // This widget draws its own <Card>; the dashboard must not wrap it again.
+  chrome: 'none',
   key: 'organizations',
   title: 'Organization',
   roles: MEMBER_ROLES,

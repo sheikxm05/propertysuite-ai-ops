@@ -12,8 +12,12 @@
  * the row exists, the second already knows it does.
  */
 
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
+
+import { PageHeader } from '@/components/shell/page-header';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { listOwnerOptions, resolvePageContext } from '@/features/properties/page-data';
 import { PropertyForm } from '@/features/properties/property-form';
@@ -58,10 +62,16 @@ export default async function EditPropertyPage({
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold">Edit property</h1>
-        <p className="text-sm text-muted-foreground">{property.name}</p>
-      </header>
+      <PageHeader
+        eyebrow={property.name}
+        title="Edit property"
+        description="Changing a property does not move its units, tenancies or tickets. Archiving is the only removal path."
+        actions={
+          <Button asChild variant="outline">
+            <Link href={`/properties/${property.id}`}>Cancel</Link>
+          </Button>
+        }
+      />
 
       <Card>
         <CardHeader>

@@ -25,6 +25,9 @@ import {
 } from '@/features/tenancies/format';
 import { resolveViewer } from '@/features/tenants/server/viewer';
 
+import Link from 'next/link';
+
+import { PageHeader } from '@/components/shell/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
@@ -49,17 +52,20 @@ export default async function TenancyDetailPage({
 
   return (
     <section className="space-y-6">
-      <header className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {tenancy.contract_number ?? 'Tenancy'}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {tenancy.unit ? `Unit ${tenancy.unit.unit_number}` : 'Unit not visible to you'}
-          </p>
-        </div>
-        <Badge variant={tenancyStatusTone(status)}>{tenancyStatusLabel(status)}</Badge>
-      </header>
+      <PageHeader
+        eyebrow={
+          <Link href="/tenancies" className="underline-offset-4 hover:underline">
+            Tenancies
+          </Link>
+        }
+        title={tenancy.contract_number ?? 'Tenancy'}
+        description={tenancy.unit ? `Unit ${tenancy.unit.unit_number}` : 'Unit not visible to you'}
+        actions={
+          <Badge variant={tenancyStatusTone(status)} className="whitespace-nowrap">
+            {tenancyStatusLabel(status)}
+          </Badge>
+        }
+      />
 
       <Card>
         <CardHeader>

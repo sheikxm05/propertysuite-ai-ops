@@ -7,8 +7,11 @@
  */
 
 import Link from 'next/link';
+import { FileSignature } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
 import {
   Table,
   TableBody,
@@ -30,9 +33,16 @@ import { asTenancyStatus } from '@/features/tenancies/lifecycle';
 export function TenancyTable({ tenancies }: { tenancies: readonly Tenancy[] }) {
   if (tenancies.length === 0) {
     return (
-      <p className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
-        No tenancies to show.
-      </p>
+      <EmptyState
+        icon={FileSignature}
+        title="No tenancies to show"
+        description="A lease is created against a unit, so the portfolio comes first. Once a unit exists you can record the tenant on it."
+        action={
+          <Button asChild variant="outline">
+            <Link href="/properties">Open the portfolio</Link>
+          </Button>
+        }
+      />
     );
   }
 
@@ -41,8 +51,12 @@ export function TenancyTable({ tenancies }: { tenancies: readonly Tenancy[] }) {
       <TableHeader>
         <TableRow>
           <TableHead>Contract</TableHead>
-          <TableHead>Term</TableHead>
-          <TableHead className="text-right">Rent</TableHead>
+          {/* The term folds away below `sm`; the contract number and the rent are what
+              identify a lease at a glance. */}
+          <TableHead numeric className="hidden sm:table-cell">
+            Term
+          </TableHead>
+          <TableHead numeric>Rent</TableHead>
           <TableHead>Status</TableHead>
         </TableRow>
       </TableHeader>
@@ -59,14 +73,19 @@ export function TenancyTable({ tenancies }: { tenancies: readonly Tenancy[] }) {
                   {tenancy.contract_number ?? 'Untitled tenancy'}
                 </Link>
               </TableCell>
-              <TableCell className="text-muted-foreground">
+              <TableCell
+                numeric
+                className="hidden whitespace-nowrap text-muted-foreground sm:table-cell"
+              >
                 {formatDate(tenancy.start_date)} – {formatDate(tenancy.end_date)}
               </TableCell>
-              <TableCell className="text-right tabular-nums">
+              <TableCell numeric className="whitespace-nowrap">
                 {formatMoney(tenancy.rent_amount, tenancy.currency)}
               </TableCell>
               <TableCell>
-                <Badge variant={tenancyStatusTone(status)}>{tenancyStatusLabel(status)}</Badge>
+                <Badge variant={tenancyStatusTone(status)} className="whitespace-nowrap">
+                  {tenancyStatusLabel(status)}
+                </Badge>
               </TableCell>
             </TableRow>
           );

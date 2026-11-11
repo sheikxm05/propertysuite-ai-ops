@@ -16,6 +16,10 @@
  * `0003` stores only its SHA-256 hash, and a URL ends up in access logs, browser history
  * and referrer headers. It is not logged, not echoed back in an error, and not retained
  * after the submission.
+ *
+ * The field lives in `app/(auth)/components/redeem-invitation-form.tsx`, a Client
+ * Component — see the header of `app/(auth)/components/sign-up-form.tsx` for why that is
+ * a correctness requirement rather than taste.
  */
 
 import Link from 'next/link';
@@ -29,10 +33,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import { FormControl, FormDescription, FormField, FormLabel } from '@/components/ui/form';
-import { Input } from '@/components/ui/input';
-import { acceptInvite } from '@/app/(auth)/actions';
-import { ActionForm } from '@/app/(auth)/components/action-form';
+import { RedeemInvitationForm } from '@/app/(auth)/components/redeem-invitation-form';
 import { requireContext } from '@/features/organizations/server-context';
 
 export const metadata = { title: 'Redeem an invitation' };
@@ -59,21 +60,7 @@ export default async function AcceptInvitationPage() {
             </AlertDescription>
           </Alert>
 
-          <ActionForm action={acceptInvite} submitLabel="Redeem" pendingLabel="Redeeming…">
-            <FormField name="invitation_token">
-              <FormLabel>Invitation token</FormLabel>
-              <FormControl>
-                {/*
-                  `autoComplete="off"` and `spellCheck={false}`: this is a credential, not
-                  a word. Browsers should not offer to remember or correct it.
-                */}
-                <Input autoComplete="off" spellCheck={false} autoFocus required />
-              </FormControl>
-              <FormDescription>
-                64 hexadecimal characters. Invitations expire seven days after they are issued.
-              </FormDescription>
-            </FormField>
-          </ActionForm>
+          <RedeemInvitationForm />
         </CardContent>
 
         <CardFooter className="text-sm text-muted-foreground">

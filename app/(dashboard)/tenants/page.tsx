@@ -8,8 +8,14 @@
  * non-staff caller before a query exists — a hidden link was never the control.
  */
 
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import { ShieldOff } from 'lucide-react';
 
+import { PageHeader } from '@/components/shell/page-header';
+import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Input } from '@/components/ui/input';
 import { ListTenantsQuerySchema } from '@shared/index';
 
 import { AuthorizationDeniedError } from '@/lib/auth/authorize';
@@ -47,53 +53,59 @@ export default async function TenantsPage({ searchParams }: PageProps) {
 
   if (!tenants) {
     return (
-      <section className="space-y-4">
-        <h1 className="text-2xl font-semibold tracking-tight">Tenants</h1>
-        <p className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
-          Your role does not include the tenant directory.
-        </p>
+      <section className="space-y-6">
+        <PageHeader title="Tenants" />
+        <EmptyState
+          icon={ShieldOff}
+          title="Your role does not include the tenant directory"
+          description="Personal contact details are restricted to organization administrators and property managers. The refusal happens in the service and again in Postgres — this page is only reporting it."
+          action={
+            <Button asChild variant="outline">
+              <Link href="/dashboard">Back to the dashboard</Link>
+            </Button>
+          }
+        />
       </section>
     );
   }
 
   return (
     <section className="space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Tenants</h1>
-        <p className="text-sm text-muted-foreground">
-          Tenant records for {viewer.membership.organization.name}. This page shows personal contact
-          details and is restricted to organization administrators and property managers.
-        </p>
-      </header>
+      <PageHeader
+        eyebrow={viewer.membership.organization.name}
+        title="Tenants"
+        description="Personal contact details, restricted to organization administrators and property managers. A service provider reaching the same records sees names only."
+      />
 
-      <form method="get" className="flex gap-2">
+      {/* A plain GET form, so a search is a URL you can share, bookmark and go back to.
+          The primitives are the shared ones rather than hand-rolled elements — they were
+          hand-rolled here and carried their own border and height values. */}
+      <form method="get" className="flex flex-wrap gap-2">
         <label className="sr-only" htmlFor="tenant-search">
           Search by name
         </label>
-        <input
+        <Input
           id="tenant-search"
           name="q"
           defaultValue={query.q ?? ''}
           placeholder="Search by name"
-          className="h-9 w-full max-w-xs rounded-md border border-input bg-background px-3 text-sm"
+          className="w-full max-w-xs"
         />
-        <button
-          type="submit"
-          className="h-9 rounded-md border border-input px-3 text-sm font-medium"
-        >
+        <Button type="submit" variant="outline">
           Search
-        </button>
+        </Button>
       </form>
 
-      <TenantTable tenants={tenants.items} />
+      <TenantTable tenants={tenants.items} filtered={Boolean(query.q)} />
 
       {tenants.hasMore && tenants.nextCursor ? (
-        <a
-          className="inline-flex text-sm underline underline-offset-4"
-          href={`/tenants?cursor=${encodeURIComponent(tenants.nextCursor)}`}
-        >
-          Next page
-        </a>
+        <div className="flex justify-end">
+          <Button asChild variant="secondary">
+            <Link href={`/tenants?cursor=${encodeURIComponent(tenants.nextCursor)}`}>
+              Next page
+            </Link>
+          </Button>
+        </div>
       ) : null}
     </section>
   );

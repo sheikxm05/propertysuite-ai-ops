@@ -8,7 +8,11 @@
  * from the route whatever this page rendered.
  */
 
+import Link from 'next/link';
+
+import { PageHeader } from '@/components/shell/page-header';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { listOwnerOptions, resolvePageContext } from '@/features/properties/page-data';
 import { PropertyForm } from '@/features/properties/property-form';
@@ -45,12 +49,16 @@ export default async function NewPropertyPage() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold">New property</h1>
-        <p className="text-sm text-muted-foreground">
-          The property is created in {context.membership.organization.name}.
-        </p>
-      </header>
+      <PageHeader
+        eyebrow="Portfolio"
+        title="New property"
+        description={`The property is created in ${context.membership.organization.name}.`}
+        actions={
+          <Button asChild variant="outline">
+            <Link href="/properties">Cancel</Link>
+          </Button>
+        }
+      />
 
       <Card>
         <CardHeader>

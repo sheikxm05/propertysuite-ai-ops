@@ -17,10 +17,13 @@
 
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { FileClock, FileCheck2, FileX2, FileUp } from 'lucide-react';
+import { FileClock, FileCheck2, FileX2, FileUp, FileSearch, type LucideIcon } from 'lucide-react';
 
+import { PageHeader } from '@/components/shell/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
+import { VERIFICATION_STATUS_STYLE, styleFor } from '@/components/ui/status';
 import {
   Table,
   TableBody,
@@ -64,13 +67,10 @@ export default async function DocumentsPage() {
 
   return (
     <div className="space-y-6">
-      <header className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Documents</h1>
-        <p className="text-sm text-muted-foreground">
-          Extracted values are proposals until someone reviews them against the document. Nothing
-          here is treated as legal or financial truth before that.
-        </p>
-      </header>
+      <PageHeader
+        title="Documents"
+        description="Extracted values are proposals until someone reviews them against the document. Nothing here is treated as legal or financial truth before that."
+      />
 
       <Card>
         <CardHeader>
@@ -85,7 +85,11 @@ export default async function DocumentsPage() {
         </CardHeader>
         <CardContent>
           {pending.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Nothing is waiting for review.</p>
+            <EmptyState
+              icon={FileCheck2}
+              title="Nothing is waiting for review"
+              description="Every document that has been through extraction has had its values accepted or rejected by a person."
+            />
           ) : (
             <DocumentTable rows={pending} />
           )}
@@ -101,7 +105,11 @@ export default async function DocumentsPage() {
         </CardHeader>
         <CardContent>
           {decided.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No documents have been reviewed yet.</p>
+            <EmptyState
+              icon={FileSearch}
+              title="No documents have been reviewed yet"
+              description="Open a document from the queue above, check the proposed values against the page, and accept or reject them."
+            />
           ) : (
             <DocumentTable rows={decided} />
           )}
@@ -131,9 +139,13 @@ function DocumentTable({ rows }: { rows: readonly Row[] }) {
       <TableHeader>
         <TableRow>
           <TableHead>Type</TableHead>
-          <TableHead>Uploaded</TableHead>
+          {/* The timestamp is the least useful column on a phone: it is the first to
+              fold away, and the row stays complete without it. */}
+          <TableHead numeric className="hidden sm:table-cell">
+            Uploaded
+          </TableHead>
           <TableHead>Status</TableHead>
-          <TableHead className="text-right">Review</TableHead>
+          <TableHead numeric>Review</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -145,11 +157,13 @@ function DocumentTable({ rows }: { rows: readonly Row[] }) {
                 <span className="ml-2 text-xs text-muted-foreground">ticket evidence</span>
               ) : null}
             </TableCell>
-            <TableCell className="text-muted-foreground">{formatDate(row.created_at)}</TableCell>
+            <TableCell numeric className="hidden text-muted-foreground sm:table-cell">
+              {formatDate(row.created_at)}
+            </TableCell>
             <TableCell>
               <StatusBadge status={row.verification_status} />
             </TableCell>
-            <TableCell className="text-right">
+            <TableCell numeric>
               <Link
                 href={`/documents/${row.id}`}
                 className="text-sm font-medium underline underline-offset-4"
@@ -164,28 +178,27 @@ function DocumentTable({ rows }: { rows: readonly Row[] }) {
   );
 }
 
+const STATUS_ICON: Record<string, LucideIcon> = {
+  verified: FileCheck2,
+  rejected: FileX2,
+  pending: FileUp,
+};
+
+/**
+ * The colour comes from `VERIFICATION_STATUS_STYLE`, not from a branch here — amber on a
+ * pending document has to mean exactly what amber means on a ticket awaiting approval,
+ * because they are the same claim: the model proposed it and no person has committed.
+ *
+ * The label stays local: `VERIFICATION_LABELS` says "Verified by a person" rather than
+ * "Verified", which is the sentence this screen exists to make.
+ */
 function StatusBadge({ status }: { status: string }) {
-  const label = VERIFICATION_LABELS[status] ?? status;
-  if (status === 'verified') {
-    return (
-      <Badge variant="success" className="gap-1">
-        <FileCheck2 className="size-3" aria-hidden />
-        {label}
-      </Badge>
-    );
-  }
-  if (status === 'rejected') {
-    return (
-      <Badge variant="destructive" className="gap-1">
-        <FileX2 className="size-3" aria-hidden />
-        {label}
-      </Badge>
-    );
-  }
+  const style = styleFor(VERIFICATION_STATUS_STYLE, status);
+  const Icon = STATUS_ICON[status];
   return (
-    <Badge variant="warning" className="gap-1">
-      <FileUp className="size-3" aria-hidden />
-      {label}
+    <Badge variant={style.variant} className="gap-1 whitespace-nowrap">
+      {Icon ? <Icon className="size-3" aria-hidden /> : null}
+      {VERIFICATION_LABELS[status] ?? style.label}
     </Badge>
   );
 }
