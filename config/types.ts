@@ -55,6 +55,21 @@ export interface DashboardWidgetProps {
   readonly role: RoleKey;
 }
 
+/**
+ * Who draws the card around a widget.
+ *
+ * `card` — the dashboard wraps the widget in a titled card. This is the default and
+ *          what `DashboardWidget.title` exists for.
+ * `none` — the widget renders its own container, so wrapping it again would double the
+ *          border and the padding.
+ *
+ * Optional, because the field was added in Wave 2 and the six widget objects were
+ * written in Wave 1. A widget that does not declare it is classified by
+ * `widgetChrome()` in `config/dashboard.slots.ts`; declaring it here overrides that and
+ * is how a feature lane takes the decision back.
+ */
+export type WidgetChrome = 'card' | 'none';
+
 export interface DashboardWidget {
   readonly key: FeatureKey;
   readonly title: string;
@@ -64,4 +79,8 @@ export interface DashboardWidget {
   readonly order: number;
   readonly enabled: boolean;
   readonly Component: ComponentType<DashboardWidgetProps>;
+  /** See `WidgetChrome`. Omit to accept the dashboard's classification. */
+  readonly chrome?: WidgetChrome;
+  /** One line under the card title, when the dashboard draws the chrome. */
+  readonly description?: string;
 }

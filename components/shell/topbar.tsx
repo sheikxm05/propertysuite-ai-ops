@@ -1,44 +1,63 @@
 'use client';
 
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Badge } from '@/components/ui/badge';
+import * as React from 'react';
 
-const ROLE_LABELS: Record<string, string> = {
-  organization_admin: 'Organization admin',
-  property_manager: 'Property manager',
-  property_owner: 'Property owner',
-  tenant: 'Tenant',
-  service_provider: 'Service provider',
-};
+import { Badge } from '@/components/ui/badge';
+import { MEMBER_ROLE_LABELS, isMemberRole } from '@shared/index';
+
+import { AccountMenu } from './account-menu';
+import { Brand } from './nav';
+import { MobileNav } from './mobile-nav';
+import { ThemeToggle } from './theme-toggle';
 
 export interface TopbarProps {
   role: string | null;
   displayName?: string | null;
+  /** The verified session email, when the profile has no name yet. */
+  email?: string | null;
+  /** Shown in the mobile sheet and the account menu. */
+  organizationName?: string | null;
+  /**
+   * Account-level controls the shell cannot own — the sign-out button in practice.
+   * Rendered at the foot of the account menu. See `AccountMenu` for why it is a slot.
+   */
+  accountActions?: React.ReactNode;
 }
 
-function initials(name: string | null | undefined) {
-  if (!name) return '?';
-  return name
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? '')
-    .join('');
-}
+export function Topbar({
+  role,
+  displayName,
+  email,
+  organizationName,
+  accountActions,
+}: TopbarProps) {
+  const label = role && isMemberRole(role) ? MEMBER_ROLE_LABELS[role] : role;
 
-export function Topbar({ role, displayName }: TopbarProps) {
   return (
-    <header className="flex h-14 items-center justify-between gap-4 border-b bg-background px-4">
-      <div className="min-w-0">
-        <p className="truncate text-sm font-medium">{displayName ?? 'Not signed in'}</p>
-      </div>
+    <header className="sticky top-0 z-30 border-b bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/70">
+      <div className="page-gutter mx-auto flex h-14 w-full max-w-[var(--content-max)] items-center gap-2">
+        <MobileNav role={role} organizationName={organizationName} />
 
-      <div className="flex items-center gap-3">
-        {/* The visible role is a cue for the demo: it makes each role boundary legible
-            on screen, which is how the isolation story gets told. */}
-        {role ? <Badge variant="secondary">{ROLE_LABELS[role] ?? role}</Badge> : null}
-        <Avatar>
-          <AvatarFallback>{initials(displayName)}</AvatarFallback>
-        </Avatar>
+        {/* The rail carries the mark on desktop; below `md` the top bar does. */}
+        <Brand className="md:hidden" />
+
+        <div className="ml-auto flex items-center gap-2">
+          {/* The visible role is a cue for the demo: it makes each role boundary legible
+              on screen, which is how the isolation story gets told. */}
+          {label ? (
+            <Badge variant="secondary" className="hidden lg:inline-flex">
+              {label}
+            </Badge>
+          ) : null}
+          <ThemeToggle />
+          <AccountMenu
+            role={role}
+            displayName={displayName}
+            email={email}
+            organizationName={organizationName}
+            accountActions={accountActions}
+          />
+        </div>
       </div>
     </header>
   );

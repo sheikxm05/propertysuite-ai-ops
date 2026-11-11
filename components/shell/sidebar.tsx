@@ -1,10 +1,6 @@
 'use client';
 
-import Link from 'next/link';
-import { usePathname } from 'next/navigation';
-import { ShieldCheck } from 'lucide-react';
-import { navForRole } from '@/config/nav.registry';
-import { cn } from '@/components/ui/utils';
+import { Brand, NavItems, OrganizationBadge } from './nav';
 
 export interface SidebarProps {
   /**
@@ -15,55 +11,34 @@ export interface SidebarProps {
   organizationName?: string | null;
 }
 
+/**
+ * The desktop navigation rail.
+ *
+ * Deliberately `hidden md:flex`: below `md` the same entries are rendered by
+ * `MobileNav` inside a sheet, from the same registry via the same `NavItems`. One source
+ * of nav truth, two presentations — see `components/shell/nav.tsx`.
+ */
 export function Sidebar({ role, organizationName }: SidebarProps) {
-  const pathname = usePathname();
-  const items = role ? navForRole(role) : [];
-
   return (
-    <aside className="hidden w-60 shrink-0 border-r bg-card md:flex md:flex-col">
-      <div className="flex h-14 items-center gap-2 border-b px-4">
-        <ShieldCheck className="size-5 text-primary" aria-hidden="true" />
-        <span className="truncate text-sm font-semibold">PropertySuite AI Ops</span>
+    <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r bg-card md:flex">
+      <div className="flex h-14 items-center border-b px-4">
+        <Brand />
       </div>
 
       {organizationName ? (
-        <div className="border-b px-4 py-3">
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">Organization</p>
-          <p className="truncate text-sm font-medium">{organizationName}</p>
+        <div className="p-3 pb-0">
+          <OrganizationBadge name={organizationName} />
         </div>
       ) : null}
 
-      <nav aria-label="Main" className="flex-1 space-y-1 p-2">
-        {items.length === 0 ? (
-          <p className="px-2 py-1.5 text-sm text-muted-foreground">
-            {role ? 'No sections available.' : 'Not signed in.'}
-          </p>
-        ) : (
-          items.map(({ key, href, label, icon: Icon }) => {
-            const active = pathname === href || pathname.startsWith(`${href}/`);
-            return (
-              <Link
-                key={key}
-                href={href}
-                aria-current={active ? 'page' : undefined}
-                className={cn(
-                  'flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors',
-                  active
-                    ? 'bg-accent font-medium text-accent-foreground'
-                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                )}
-              >
-                <Icon className="size-4 shrink-0" aria-hidden="true" />
-                <span className="truncate">{label}</span>
-              </Link>
-            );
-          })
-        )}
+      <nav aria-label="Main" className="flex-1 overflow-y-auto p-3">
+        <NavItems role={role} />
       </nav>
 
       <div className="border-t p-3">
-        <p className="text-xs text-muted-foreground">
-          Links are presentation only. Every route re-checks authorization server-side.
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          Links are presentation only. Every route re-checks authorization server-side and row-level
+          security denies independently.
         </p>
       </div>
     </aside>

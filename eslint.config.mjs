@@ -37,6 +37,8 @@ const config = [
     ignores: [
       'node_modules/**',
       '.next/**',
+      // Vercel deployment artifacts: minified build output, not source.
+      '.vercel/**',
       'coverage/**',
       'playwright-report/**',
       'test-results/**',

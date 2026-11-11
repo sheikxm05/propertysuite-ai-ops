@@ -2,9 +2,40 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * PropertySuite design tokens.
+ *
+ * Every colour is an HSL triplet without the `hsl()` wrapper, because
+ * `tailwind.config.ts` composes them as `hsl(var(--token))` and therefore needs the raw
+ * channels to apply opacity modifiers such as `bg-primary/90`.
+ *
+ * TWO RULES GOVERN THIS FILE.
+ *
+ * 1. **Colour carries meaning, never decoration.** `success` is a terminal good state
+ *    (ticket completed, document verified, tenancy active, tenant account linked),
+ *    `warning` is "a human has not decided yet" (awaiting approval, verification
+ *    pending, tenancy expiring), `destructive` is refusal or urgency (rejected,
+ *    urgent, terminated), `primary` is the product's own voice and the one action a
+ *    screen wants, `secondary`/`muted` are neutral. `components/ui/status.ts` is the
+ *    single table that maps domain enums onto these names — a status must never pick a
+ *    colour at the call site.
+ *
+ * 2. **Both themes are first class.** `.dark` is not a dimmed copy: chroma rises and
+ *    lightness inverts so the semantic set stays distinguishable. Every text pair below
+ *    was measured against WCAG 2.1 AA (4.5:1 body, 3:1 for control borders and focus
+ *    rings) — the measured ratios are recorded in the lane report. Changing a value here
+ *    means re-measuring it, not eyeballing it.
+ *
+ * The hue family is a deep azure with an emerald/amber accent set: a property-operations
+ * console for Dubai should read as instrument panel, not as marketing site.
+ */
+
 @layer base {
   :root {
-    --background: 0 0% 100%;
+    /* Light theme — the default, and what an unconfigured first visit falls back to. */
+    color-scheme: light;
+
+    --background: 210 40% 98%;
     --foreground: 222 47% 11%;
 
     --card: 0 0% 100%;
@@ -13,74 +44,97 @@
     --popover: 0 0% 100%;
     --popover-foreground: 222 47% 11%;
 
-    --primary: 199 89% 32%;
+    /* Deep azure. 6.84:1 against white, so it carries white label text on a button. */
+    --primary: 207 94% 33%;
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 210 40% 96%;
-    --secondary-foreground: 222 47% 11%;
+    --secondary: 210 40% 93%;
+    --secondary-foreground: 222 45% 18%;
 
     --muted: 210 40% 96%;
-    --muted-foreground: 215 16% 47%;
+    --muted-foreground: 215 20% 38%;
 
-    --accent: 210 40% 96%;
-    --accent-foreground: 222 47% 11%;
+    /* Accent is a tinted azure wash, NOT another grey. It is the hover and
+       active-navigation surface, so making it neutral is what made the shell look
+       unfinished. 9.36:1 for its own foreground. */
+    --accent: 202 86% 92%;
+    --accent-foreground: 207 92% 22%;
 
-    --destructive: 0 72% 51%;
+    --destructive: 0 72% 44%;
     --destructive-foreground: 0 0% 100%;
 
-    --success: 142 71% 35%;
+    --success: 160 84% 25%;
     --success-foreground: 0 0% 100%;
 
-    --warning: 35 92% 45%;
+    /* Amber has to be darkened well past its "pretty" lightness to hold white text. */
+    --warning: 30 95% 36%;
     --warning-foreground: 0 0% 100%;
 
-    --border: 214 32% 91%;
-    --input: 214 32% 91%;
-    --ring: 199 89% 32%;
+    --border: 214 32% 88%;
+    /* `input` draws the edge of a control, so it is a 1.4.11 non-text target at 3:1,
+       not a hairline like `border`. */
+    --input: 214 25% 57%;
+    --ring: 207 94% 40%;
 
-    --radius: 0.5rem;
+    --radius: 0.625rem;
+
+    /* One page measure for the whole product, so no two routes disagree about it. */
+    --content-max: 88rem;
+
+    --font-sans:
+      'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial,
+      'Noto Sans', sans-serif;
   }
 
   .dark {
+    color-scheme: dark;
+
     --background: 222 47% 7%;
     --foreground: 210 40% 96%;
 
     --card: 222 44% 10%;
     --card-foreground: 210 40% 96%;
 
-    --popover: 222 44% 10%;
+    --popover: 222 44% 12%;
     --popover-foreground: 210 40% 96%;
 
-    --primary: 199 89% 48%;
-    --primary-foreground: 222 47% 7%;
+    /* Inverted relationship: on a dark field the brand colour is the light one and
+       carries dark text. */
+    --primary: 203 92% 60%;
+    --primary-foreground: 215 60% 9%;
 
-    --secondary: 217 33% 17%;
+    --secondary: 217 33% 18%;
     --secondary-foreground: 210 40% 96%;
 
-    --muted: 217 33% 17%;
-    --muted-foreground: 215 20% 65%;
+    --muted: 217 33% 16%;
+    --muted-foreground: 215 22% 68%;
 
-    --accent: 217 33% 17%;
-    --accent-foreground: 210 40% 96%;
+    --accent: 206 60% 22%;
+    --accent-foreground: 203 92% 80%;
 
-    --destructive: 0 63% 50%;
-    --destructive-foreground: 210 40% 96%;
+    --destructive: 0 78% 64%;
+    --destructive-foreground: 0 60% 10%;
 
-    --success: 142 60% 45%;
-    --success-foreground: 222 47% 7%;
+    --success: 158 68% 52%;
+    --success-foreground: 160 70% 8%;
 
-    --warning: 35 85% 55%;
-    --warning-foreground: 222 47% 7%;
+    --warning: 38 95% 58%;
+    --warning-foreground: 30 80% 10%;
 
-    --border: 217 33% 20%;
-    --input: 217 33% 20%;
-    --ring: 199 89% 48%;
+    --border: 217 30% 24%;
+    --input: 216 20% 46%;
+    --ring: 203 92% 62%;
   }
 }
 
 @layer base {
   * {
     @apply border-border;
+  }
+
+  html {
+    font-family: var(--font-sans);
+    -webkit-tap-highlight-color: transparent;
   }
 
   body {
@@ -90,14 +144,63 @@
       'calt' 1;
   }
 
+  /*
+   * One measure for the product. Set on the element rather than on a utility class so
+   * that every route — including the ones this lane does not own — inherits the same
+   * rhythm without its file being edited. Pages stay full-bleed below the cap.
+   */
+  main {
+    width: 100%;
+    margin-inline: auto;
+    max-width: var(--content-max);
+  }
+
+  /* Headings carry the hierarchy; the type scale is deliberately short. */
+  h1 {
+    @apply text-pretty;
+  }
+
   /* Visible focus is an accessibility requirement, not decoration (W2-L5 gate). */
   :focus-visible {
     @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+
+  /*
+   * Theme changes animate so the switch reads as one object changing state rather than
+   * as a page reload. Scoped to colour properties only: animating `all` here would make
+   * every layout change in the app crawl.
+   */
+  @media (prefers-reduced-motion: no-preference) {
+    body,
+    aside,
+    header,
+    [data-theme-surface] {
+      transition:
+        background-color 160ms ease,
+        border-color 160ms ease,
+        color 160ms ease;
+    }
   }
 }
 
 @layer utilities {
   .text-balance {
     text-wrap: balance;
+  }
+
+  /*
+   * Numeric columns. Figures in a table must occupy identical advance widths or the eye
+   * cannot compare them down the column; `slashed-zero` keeps a contract number legible.
+   */
+  .numeric {
+    font-variant-numeric: tabular-nums slashed-zero;
+    font-feature-settings:
+      'tnum' 1,
+      'zero' 1;
+  }
+
+  /* Page gutter, shared by the shell header and every page body beneath it. */
+  .page-gutter {
+    @apply px-4 sm:px-6 lg:px-8;
   }
 }

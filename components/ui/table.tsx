@@ -1,10 +1,36 @@
 import * as React from 'react';
 import { cn } from './utils';
 
+/**
+ * Table density and alignment.
+ *
+ * Two decisions are made here once, rather than at every call site:
+ *
+ *  - **Density.** Header and body cells share one horizontal rhythm (`px-3`) and a row
+ *    height tall enough to be hit on a touch screen without the table turning into a
+ *    list. Five feature tables each choosing their own padding is how a product starts
+ *    looking assembled rather than designed.
+ *  - **Numerals.** `numeric` right-aligns a column and switches it to tabular, slashed
+ *    figures. Proportional digits make a column of money or counts impossible to compare
+ *    down the page, because the digits do not line up vertically.
+ *
+ * `numeric` is an optional boolean prop rather than a class at the call site so the
+ * alignment and the numeral style can never be applied to only half of a column.
+ */
+
+interface NumericProps {
+  /** Right-align and use tabular figures. For money, counts, dates and identifiers. */
+  numeric?: boolean;
+}
+
 const Table = React.forwardRef<HTMLTableElement, React.ComponentProps<'table'>>(
   ({ className, ...props }, ref) => (
     <div className="relative w-full overflow-auto">
-      <table ref={ref} className={cn('w-full caption-bottom text-sm', className)} {...props} />
+      <table
+        ref={ref}
+        className={cn('w-full caption-bottom border-collapse text-sm', className)}
+        {...props}
+      />
     </div>
   ),
 );
@@ -49,25 +75,34 @@ const TableRow = React.forwardRef<HTMLTableRowElement, React.ComponentProps<'tr'
 );
 TableRow.displayName = 'TableRow';
 
-const TableHead = React.forwardRef<HTMLTableCellElement, React.ComponentProps<'th'>>(
-  ({ className, ...props }, ref) => (
+const TableHead = React.forwardRef<HTMLTableCellElement, React.ComponentProps<'th'> & NumericProps>(
+  ({ className, numeric, scope, ...props }, ref) => (
     <th
       ref={ref}
       className={cn(
-        'h-10 px-2 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0',
+        'h-11 px-3 text-left align-middle text-xs font-semibold uppercase tracking-wide text-muted-foreground',
+        '[&:has([role=checkbox])]:pr-0',
+        numeric && 'text-right',
         className,
       )}
       {...props}
+      // A column header without a scope is ambiguous to a screen reader once a table has
+      // row headers too. Callers may override it; they may not omit it.
+      scope={scope ?? 'col'}
     />
   ),
 );
 TableHead.displayName = 'TableHead';
 
-const TableCell = React.forwardRef<HTMLTableCellElement, React.ComponentProps<'td'>>(
-  ({ className, ...props }, ref) => (
+const TableCell = React.forwardRef<HTMLTableCellElement, React.ComponentProps<'td'> & NumericProps>(
+  ({ className, numeric, ...props }, ref) => (
     <td
       ref={ref}
-      className={cn('p-2 align-middle [&:has([role=checkbox])]:pr-0', className)}
+      className={cn(
+        'px-3 py-2.5 align-middle [&:has([role=checkbox])]:pr-0',
+        numeric && 'numeric text-right',
+        className,
+      )}
       {...props}
     />
   ),
