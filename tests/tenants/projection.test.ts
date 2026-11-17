@@ -18,6 +18,7 @@ import { TenantNameSchema, TenantSchema } from '@shared/index';
 
 import {
   TENANT_FULL_FIELDS,
+  TENANT_GRANTED_FIELDS,
   isNameOnlyProjection,
   serializeTenant,
   serializeTenantName,
@@ -77,9 +78,40 @@ describe('tenantSelectList', () => {
     expect(tenantSelectList(PROVIDER_TENANT_FIELDS)).not.toContain('*');
   });
 
-  it('selects every column for an unrestricted read', () => {
+  it('differs from the full column set by exactly the two revoked columns', () => {
+    // The link between the SCHEMA shape and the GRANT. `TENANT_FULL_FIELDS` is tied to
+    // `TenantSchema` by a compile-time check, so a column added to the table lands
+    // there; `TENANT_GRANTED_FIELDS` is what `authenticated` may actually SELECT. A
+    // future migration that grants or revokes a column without updating the second list
+    // fails here, instead of failing as a 403 in production against a record the caller
+    // is entitled to read -- which is exactly how 0004's revoke was missed the first
+    // time round.
+    const revoked = TENANT_FULL_FIELDS.filter(
+      (field) => !TENANT_GRANTED_FIELDS.includes(field as (typeof TENANT_GRANTED_FIELDS)[number]),
+    );
+
+    expect(revoked).toEqual(['email', 'phone']);
+  });
+
+  it('selects every GRANTED column for an unrestricted read, and no revoked one', () => {
     const list = tenantSelectList(null);
-    for (const field of TENANT_FULL_FIELDS) expect(list).toContain(field);
+    for (const field of TENANT_GRANTED_FIELDS) expect(list).toContain(field);
+
+    // The inversion of the old assertion, and the point of migration 0004. `null` used
+    // to resolve to TENANT_FULL_FIELDS, which names `email` and `phone` — columns no
+    // role may SELECT any more. That is not an over-fetch, it is a 42501 that surfaces
+    // as a 403 on a record the caller is fully entitled to read. Contact details now
+    // arrive through the `tenant_contact` RPC, never through this select list.
+    expect(list).not.toContain('email');
+    expect(list).not.toContain('phone');
+  });
+
+  it('refuses to smuggle a revoked column in via an explicit projection', () => {
+    // A projection is an application-layer artefact; the grant is the floor underneath
+    // it. Naming a revoked column here must not reach Postgres.
+    const list = tenantSelectList(['id', 'organization_id', 'full_name', 'email', 'phone']);
+
+    expect(list).toBe('id, organization_id, full_name');
   });
 
   it('omits email and phone for the provider projection', () => {

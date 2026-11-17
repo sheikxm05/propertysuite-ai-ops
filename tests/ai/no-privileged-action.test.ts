@@ -16,6 +16,15 @@
  *   exercise the paths it knows about; the source scan covers the ones nobody thought to
  *   write a test for.
  *
+ * The structural half now also covers `services/ai/agent/**`, which runs a model in a
+ * loop and lets it choose what happens next. Its writes are two append-only evidence
+ * tables — `agent_runs` and `agent_proposals` — performed by the orchestrator after the
+ * loop has finished, from values it collected. A proposal is a *description of* an
+ * action; it leaves `'pending'` only when a human calls a `security definer` RPC, and
+ * executing it is a separate step outside this lane. The assertions below pin that:
+ * every write in the lane is an `insert`, and nothing a tool call can reach holds a
+ * database handle at all.
+ *
  * A source scan is an unusual test, and it is deliberate. The property being protected is
  * "this capability is absent", and absence is not observable by calling a function.
  */
@@ -215,6 +224,18 @@ function collect(root: string): SourceFile[] {
 
 const LANE_FILES: readonly SourceFile[] = LANE_ROOTS.flatMap(collect);
 
+/**
+ * The agent subsystem, scanned separately as well as inside the lane.
+ *
+ * It is the one part of the lane that runs a model in a loop and lets it pick what
+ * happens next, so it is where a privileged capability would be most costly and least
+ * visible. Asserting its write set on its own means a new write there cannot hide inside
+ * a lane-wide total that was going to be updated anyway.
+ */
+const AGENT_FILES: readonly SourceFile[] = LANE_FILES.filter((file) =>
+  file.path.startsWith('services/ai/agent/'),
+);
+
 /** Strips block and line comments so a prohibition is not matched inside prose about it. */
 function code(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
@@ -245,10 +266,83 @@ describe('the lane’s source has no privileged write path', () => {
     expect(LANE_FILES.some((file) => file.path.includes('app/api/v1/ai'))).toBe(true);
   });
 
-  it('writes exactly two tables, and only ever appends to them', () => {
-    // Conversation evidence, and nothing else. No ticket, no activity, no document, no
-    // membership — and no `update`, `upsert` or `delete` anywhere, on any table.
-    expect(tableWrites(LANE_FILES)).toEqual(['ai_conversations.insert', 'ai_messages.insert']);
+  it('writes exactly four tables, and only ever appends to them', () => {
+    // Evidence of what was said and what was suggested, and nothing else. No ticket, no
+    // activity, no document, no membership, no provider assignment.
+    //
+    //   ai_conversations / ai_messages — the intake transcript
+    //   agent_runs                     — that an agent invocation happened, and its input
+    //   agent_proposals                — what the agent suggested, always `'pending'`
+    //
+    // Four tables, four appends. Every one of them records that something was *proposed
+    // or said*; none of them is a domain state change. Carrying a proposal out happens
+    // later, through the normal domain service, under a human's own credentials.
+    expect(tableWrites(LANE_FILES)).toEqual([
+      'agent_proposals.insert',
+      'agent_runs.insert',
+      'ai_conversations.insert',
+      'ai_messages.insert',
+    ]);
+  });
+
+  it('performs no update, upsert or delete on any table, anywhere in the lane', () => {
+    // Derived from the same scan rather than asserted separately, so it keeps holding as
+    // the write set above grows: whatever the lane writes, every statement must be an
+    // append. This is the assertion that makes a future `update` a test failure instead
+    // of a code review question.
+    //
+    // It matters most for `agent_proposals`. Migration `0004` revokes `UPDATE` on that
+    // table from `authenticated` and declares no UPDATE policy, so a proposal leaves
+    // `'pending'` only through `approve_agent_proposal(uuid)` / `reject_agent_proposal(uuid)`
+    // — `security definer` functions that check `is_org_staff()` themselves. An `update`
+    // appearing in this lane's source would therefore be a genuine regression: either
+    // dead code that cannot run, or an attempt to route around the decision RPCs.
+    const operations = [...new Set(tableWrites(LANE_FILES).map((write) => write.split('.')[1]))];
+    expect(operations).toEqual(['insert']);
+  });
+
+  it('confines the agent subsystem to its own two append-only tables', () => {
+    expect(AGENT_FILES.length).toBeGreaterThan(5);
+    // The subsystem that runs a model in a loop writes `agent_runs` and `agent_proposals`
+    // and touches no other table in any way that changes a row. Notably absent:
+    // `maintenance_tickets`, `maintenance_activities`, `service_providers` — the three
+    // tables its propose tools are *about*.
+    expect(tableWrites(AGENT_FILES)).toEqual(['agent_proposals.insert', 'agent_runs.insert']);
+  });
+
+  it('gives nothing reachable from a model tool call a database handle', () => {
+    // The claim is structural, not behavioural: a read tool is handed a scope object that
+    // exposes query methods and keeps its client in a closure, and a propose tool has no
+    // `execute` member at all. So the files the model can cause to run — the loop, the
+    // tool implementations, the registry, the transport — must contain no `.from(` and no
+    // `.rpc(` of their own. If one appeared, the tool would have acquired a handle and
+    // the two writes above would no longer be the orchestrator's exclusive decision.
+    const reachable = AGENT_FILES.filter(
+      (file) =>
+        file.path.startsWith('services/ai/agent/tools/') ||
+        file.path.startsWith('services/ai/agent/model/') ||
+        file.path === 'services/ai/agent/loop.ts' ||
+        file.path === 'services/ai/agent/document-search.ts',
+    );
+    expect(reachable.length).toBeGreaterThan(4);
+    for (const file of reachable) {
+      expect(code(file.text), file.path).not.toMatch(/\.from\(/);
+      expect(code(file.text), file.path).not.toMatch(/\brpc\(/);
+      expect(tableWrites([file]), file.path).toEqual([]);
+    }
+  });
+
+  it('reaches an RPC from exactly two files, neither of them the loop', () => {
+    // `tableWrites` cannot see through an RPC: `approve_agent_proposal` does write a row,
+    // it just does it inside Postgres. So the call sites are enumerated the same way the
+    // table writes are — `persistence.ts`, whose decision helpers are called only from a
+    // route with an authenticated session behind it, and `intake.ts`, whose
+    // `can_access_unit` is a read. Nothing in the loop or the tools is on this list.
+    const callers = LANE_FILES.filter((file) => /\brpc\(/.test(code(file.text)));
+    expect(callers.map((file) => file.path).sort()).toEqual([
+      'services/ai/agent/persistence.ts',
+      'services/ai/maintenance/intake.ts',
+    ]);
   });
 
   it('never names maintenance_activities at all, which is append-only and not ours', () => {
@@ -262,7 +356,16 @@ describe('the lane’s source has no privileged write path', () => {
     const reads = LANE_FILES.filter((file) =>
       /from\(\s*'maintenance_tickets'\s*\)/.test(code(file.text)),
     );
-    expect(reads.map((file) => file.path)).toEqual(['services/ai/maintenance/intake.ts']);
+    // Two files name the table, and the second is the point of this assertion.
+    // `read-scope.ts` backs the agent's `recent_tickets` tool, which is how the model
+    // learns a unit already has an open AC ticket. Creating a ticket is a *proposal*; it
+    // is carried out later through the normal domain service, under a human's own
+    // credentials, outside this lane. So the file that lets a model see tickets must
+    // never be the file that writes one.
+    expect(reads.map((file) => file.path)).toEqual([
+      'services/ai/agent/read-scope.ts',
+      'services/ai/maintenance/intake.ts',
+    ]);
     expect(tableWrites(reads)).toEqual([]);
   });
 

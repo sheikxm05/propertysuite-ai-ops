@@ -46,7 +46,7 @@ import {
 } from './cursor';
 import { sanitizeSearchTerm, type DataContext, type Page } from './context';
 import {
-  TENANT_FULL_FIELDS,
+  TENANT_GRANTED_FIELDS,
   serializeTenant,
   serializeTenantView,
   tenantSelectList,
@@ -74,7 +74,56 @@ type _TenantPatchParity =
 const _tenantPatchParity: _TenantPatchParity = true;
 void _tenantPatchParity;
 
-const FULL_SELECT = TENANT_FULL_FIELDS.join(', ');
+// Migration 0004 revoked SELECT on `email` and `phone` for EVERY role. Selecting them
+// now raises 42501, so the read list is the granted subset and contact details are
+// hydrated separately through the `tenant_contact` RPC. `TENANT_FULL_FIELDS` is still
+// the schema-linked list and still governs writes, which were not revoked.
+const FULL_SELECT = TENANT_GRANTED_FIELDS.join(', ');
+
+/** What `tenant_contact` returns per row. */
+interface TenantContactRow {
+  tenant_id: string;
+  email: string | null;
+  phone: string | null;
+}
+
+/**
+ * Merges `email` and `phone` onto rows that could not select them.
+ *
+ * One RPC call for the whole page rather than one per row: `tenant_contact` takes a null
+ * `p_tenant_id` meaning "every tenant in this organization you may see", which is why
+ * the function was given that signature. A provider calling it gets 42501, so a
+ * non-staff caller simply keeps nulls and the name-only projection stands.
+ */
+async function hydrateContacts<T extends { id: string }>(
+  ctx: DataContext,
+  organizationId: string,
+  rows: readonly T[],
+): Promise<(T & { email: string | null; phone: string | null })[]> {
+  const base = rows.map((r) => ({
+    ...r,
+    email: null as string | null,
+    phone: null as string | null,
+  }));
+  if (base.length === 0) return base;
+
+  const { data, error } = await ctx.supabase.rpc('tenant_contact', {
+    p_organization_id: organizationId,
+    p_tenant_id: null,
+  });
+
+  // A non-staff caller is refused by the RPC. That is the boundary working, not a
+  // failure: the row keeps its nulls and the caller sees name only.
+  if (error || !Array.isArray(data)) return base;
+
+  const byId = new Map<string, TenantContactRow>(
+    (data as TenantContactRow[]).map((c) => [c.tenant_id, c]),
+  );
+  return base.map((r) => {
+    const c = byId.get(r.id);
+    return c ? { ...r, email: c.email, phone: c.phone } : r;
+  });
+}
 
 /* -------------------------------------------------------------------- read -- */
 
@@ -124,8 +173,15 @@ export async function listTenants(
   const rows = (data ?? []) as unknown as (TenantRowLike & PageableRow)[];
   const page = takePage(rows, query.limit);
 
+  // `email` and `phone` are not SELECT-able by anyone after migration 0004, so they are
+  // merged back in here through the staff-only `tenant_contact` RPC. One call for the
+  // whole page rather than one per row -- which is why that function accepts a null
+  // tenant id. A non-staff caller is refused by the RPC and keeps nulls, so the
+  // name-only projection stands without a second code path.
+  const hydrated = await hydrateContacts(ctx, organizationId, page.items);
+
   return {
-    items: page.items.map((row) => serializeTenant(row)),
+    items: hydrated.map((row) => serializeTenant(row as unknown as TenantRowLike)),
     nextCursor: page.nextCursor,
     hasMore: page.hasMore,
     limit: query.limit,
@@ -180,7 +236,13 @@ export async function getTenantById(ctx: DataContext, tenantId: string): Promise
     throw notFoundTenant();
   }
 
-  return serializeTenantView(row, projection);
+  // Same reasoning as the list path: contact columns are not readable by any role, so a
+  // staff caller merges them back through the RPC. A provider's projection excludes them
+  // anyway, so this is a no-op on that path rather than a second branch.
+  const [withContacts = row] = await hydrateContacts(ctx, organizationId, [
+    row as unknown as { id: string },
+  ]);
+  return serializeTenantView(withContacts as unknown as TenantRowLike, projection);
 }
 
 /**
@@ -231,7 +293,14 @@ export async function createTenant(ctx: DataContext, input: CreateTenantInput): 
     .single();
   throwIfPostgresError(error);
 
-  return serializeTenant(data as unknown as TenantRowLike);
+  // The insert carries `email` and `phone`, but RETURNING is a SELECT and 0004 revoked
+  // those columns from every role -- so without this the response reports null for a
+  // value the caller just supplied. Writable but unreadable is the whole shape of the
+  // grant, and every path that returns a row has to account for it.
+  const [created = data as unknown as { id: string }] = await hydrateContacts(ctx, organizationId, [
+    data as unknown as { id: string },
+  ]);
+  return serializeTenant(created as unknown as TenantRowLike);
 }
 
 /**
@@ -281,7 +350,11 @@ export async function updateTenant(
   throwIfPostgresError(error);
 
   if (!data) throw notFoundTenant();
-  return serializeTenant(data as unknown as TenantRowLike);
+  // Same reasoning as the create path: RETURNING cannot read the revoked columns back.
+  const [updated = data as unknown as { id: string }] = await hydrateContacts(ctx, organizationId, [
+    data as unknown as { id: string },
+  ]);
+  return serializeTenant(updated as unknown as TenantRowLike);
 }
 
 /* ---------------------------------------------------------------- linkage -- */

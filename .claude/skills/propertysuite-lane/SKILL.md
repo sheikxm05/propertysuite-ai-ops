@@ -1,15 +1,26 @@
 ---
 name: propertysuite-lane
-description: Operating procedure for a single PropertySuite lane agent working in parallel with five others. Use when assigned a lane id (w0-l1 … w2-l6), when told to build a wave-0/1/2 lane, or when any work in this repo must respect path ownership from lanes.json. Covers the read order, ownership enforcement, the interface freeze, security invariants, how to report a planning defect instead of working around it, and the hard prohibition on creating Artifacts.
+description: Operating procedure for a single PropertySuite lane agent running as one of five or six background agents in parallel. Use when assigned a lane id (w0-l1 … w3-l7), when told to build a wave-0/1/2/3 lane, or when any work in this repo must respect path ownership from lanes.json. Covers the read order, ownership enforcement in a shared tree, the interface freeze, security invariants, how to report a planning defect instead of working around it, what evidence to paste back, and the hard prohibition on creating Artifacts.
 ---
 
 # Working a PropertySuite lane
 
-You are **one of six agents working in parallel on this repository right now.** Five
-other agents are editing files beside you. Everything below exists so that none of your
-work collides with theirs.
+You are **one of five or six agents working in parallel on this repository right now**,
+and they are editing files beside you _in the same working tree_. Nothing stops your
+writes mechanically except the path discipline below, so the discipline is the
+mechanism. Everything here exists so that none of your work collides with theirs.
 
-Your lane id looks like `w0-l4` or `w1-l2`. If you were not given one, stop and ask
+Practical consequences of the shared tree, which are easy to get wrong:
+
+- `git status` shows **everyone's** changes, not yours. Do not read it as a report on
+  your own work, and do not tidy a modification you did not make.
+- Run **no git commands at all** — no add, no commit, no stash, no checkout. The
+  orchestrator commits, per lane, after checking ownership. A stash or a checkout here
+  destroys another agent's uncommitted work.
+- A file outside your lane may be mid-edit and briefly inconsistent. Read it for
+  context, never "repair" it.
+
+Your lane id looks like `w0-l4` or `w3-l2`. If you were not given one, stop and ask
 which lane you are. Do not guess, and do not start work "generally" — there is no
 unassigned work in this repo.
 
@@ -65,11 +76,15 @@ node scripts/check-lane-ownership.mjs --list          # confirm your globs
 node scripts/check-lane-ownership.mjs --overlaps      # sanity: map is collision-free
 ```
 
-Then, before **every** commit:
+Then, before you report done:
 
 ```bash
 node scripts/check-lane-ownership.mjs --lane <your-id>
 ```
+
+Because lanes share one tree, git cannot attribute a change to its author — the
+validator's `--shared-tree` mode exists for exactly this, and the orchestrator runs it.
+Your job is the simpler one: know which paths you touched, and be able to say so.
 
 A violation is not a hurdle to clear. It means the plan assigned you work you cannot
 legally do. Revert the offending path and report it (see below). Never widen a glob,
@@ -142,6 +157,13 @@ EXIT GATE: met / not met — <evidence, or exactly what is missing>
 PLANNING DEFECTS: none / <blocks as formatted above>
 ```
 
-Report faithfully. If tests fail, show the output. If you skipped something, say so and
-say why. A lane reported as complete when it is not corrupts the wave gate, and the next
-six agents build on top of the gap.
+Report faithfully, and paste evidence **verbatim** — the orchestrator cannot see your
+terminal and will not take a summary for a result. If tests fail, show the output. If
+you skipped something, say so and say why. A lane reported as complete when it is not
+corrupts the wave gate, and the next six agents build on top of the gap.
+
+One failure mode matters more than the rest here. When a test or a safety gate fails,
+the default assumption is that **the gate is right and your change is wrong** — several
+of this repo's gates have caught real leaks, and every one of them could have been made
+to pass by deleting an assertion. If you believe a gate is genuinely stale, say that
+explicitly and show why; never quietly widen it until it goes green.

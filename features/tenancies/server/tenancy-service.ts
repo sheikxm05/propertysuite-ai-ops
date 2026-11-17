@@ -35,11 +35,12 @@ import {
   type Tenancy,
   type TenancyDetail,
   type TenancyStatus,
+  type Tenant,
   type UnitStatus,
   type UpdateTenancyInput,
 } from '@shared/index';
 
-import { ApiRouteError, throwIfPostgresError } from '@/lib/api/errors';
+import { ApiRouteError, isApiRouteError, throwIfPostgresError } from '@/lib/api/errors';
 import {
   AuthorizationDeniedError,
   assertAuthorized,
@@ -58,11 +59,7 @@ import {
   type PageableRow,
 } from '@/features/tenants/server/cursor';
 import type { DataContext, Page } from '@/features/tenants/server/context';
-import {
-  serializeTenant,
-  tenantSelectList,
-  type TenantRowLike,
-} from '@/features/tenants/server/serialize';
+import { getTenantById } from '@/features/tenants/server/tenant-service';
 
 import {
   CREATABLE_TENANCY_STATUSES,
@@ -389,8 +386,35 @@ export async function getTenancyById(ctx: DataContext, tenancyId: string): Promi
  * function because the tenancy read already refused them. A name-only projection is
  * also treated as `null` — `TenancyDetailSchema` embeds `TenantSchema`, which has no
  * reduced form, so there is no shape in which a partial record could be attached.
+ *
+ * WHY THIS DELEGATES RATHER THAN QUERYING. Migration `0004_agentic.sql` revoked SELECT
+ * on `tenants.email` and `tenants.phone` for *every* role, staff included: RLS filters
+ * rows and not columns, all five application roles share the single Postgres role
+ * `authenticated`, and so the matrix's "name only, via assignment" for a
+ * `service_provider` was not expressible as a policy. The two columns now have exactly
+ * one read path — the `security definer` RPC `tenant_contact(p_organization_id,
+ * p_tenant_id)`, which checks `is_org_staff()` and raises `42501` otherwise.
+ *
+ * Selecting the granted five columns here and serialising them therefore produced a
+ * tenancy detail whose `tenant.email` and `tenant.phone` were silently `null` for
+ * everybody — a blank contact panel with no error to explain it. The hydration lives in
+ * `hydrateContacts()` inside `tenant-service.ts`, which is private to that module, so
+ * this calls the exported read that already uses it instead of copying the RPC call into
+ * this lane (CLAUDE.md rule 4). That read performs the same `projectionFor()` gate, the
+ * same granted-column select, a second authorization against the row's own
+ * `organization_id`, and then one `tenant_contact` call — one RPC for the request, not
+ * one per row.
+ *
+ * A non-staff caller who is not the tenant themselves is refused by the RPC and keeps
+ * the nulls. That is the boundary holding, and there is deliberately no fallback that
+ * fills the fields some other way: a `property_owner` is already turned away by the
+ * projection gate above, and a `service_provider` never reaches this function.
+ *
+ * `getTenantById` raises `NOT_FOUND` where this function returned `null` — the tenancy
+ * itself has already been authorized at this point, so an invisible or missing tenant
+ * record drops the embed rather than 404-ing a lease the caller may read.
  */
-async function loadEmbeddedTenant(ctx: DataContext, tenantId: string) {
+async function loadEmbeddedTenant(ctx: DataContext, tenantId: string): Promise<Tenant | null> {
   const projection = projectionFor(ctx.membership, {
     type: 'tenant',
     organizationId: ctx.membership.organization.id,
@@ -398,15 +422,13 @@ async function loadEmbeddedTenant(ctx: DataContext, tenantId: string) {
   });
   if (projection !== null) return null;
 
-  const { data, error } = await ctx.supabase
-    .from('tenants')
-    .select(tenantSelectList(projection))
-    .eq('organization_id', ctx.membership.organization.id)
-    .eq('id', tenantId)
-    .maybeSingle();
-  throwIfPostgresError(error);
-
-  return data ? serializeTenant(data as unknown as TenantRowLike) : null;
+  try {
+    const view = await getTenantById(ctx, tenantId);
+    return view.kind === 'full' ? view.tenant : null;
+  } catch (error) {
+    if (isApiRouteError(error) && error.code === 'NOT_FOUND') return null;
+    throw error;
+  }
 }
 
 /**

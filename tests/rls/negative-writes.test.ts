@@ -72,6 +72,21 @@ describe('no DELETE succeeds, anywhere', () => {
       ['notifications', f.notifications.a_admin ?? ''],
       ['audit_logs', f.auditLogs.al1],
       ['organization_invitations', f.invitations.inv1],
+      // Migration 0004, the agentic tables. All four are tenant-scoped, so CLAUDE.md
+      // rule 6 covers them exactly as it covers the sixteen above: archive, never
+      // delete. `agent_proposals` matters most — a proposal that could be deleted is a
+      // proposal whose refusal leaves no trace, which is the "AI drafts, humans commit"
+      // audit trail quietly erased.
+      ['document_chunks', f.documentChunks.d1],
+      ['inbound_messages', f.inboundMessages.im1],
+      ['agent_runs', f.agentRuns.ar1],
+      ['agent_proposals', f.agentProposals.ap1],
+      // Migration 0006. The outbound ledger is the record of what the organization said
+      // to a tenant on their phone, including whether a model drafted it and which
+      // human released it. A DELETE path here is the ability to make a message that was
+      // actually delivered look as though it never was — the CLAUDE.md rule 7 audit
+      // trail erased one row at a time, which is harder to spot than erasing all of it.
+      ['outbound_messages', f.outboundMessages.om1],
     ];
 
     expect(

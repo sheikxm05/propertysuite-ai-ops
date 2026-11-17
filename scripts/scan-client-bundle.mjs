@@ -38,6 +38,14 @@ const SERVER_ONLY_VARS = [
   'STRIPE_WEBHOOK_SECRET',
   'WHATSAPP_ACCESS_TOKEN',
   'WHATSAPP_VERIFY_TOKEN',
+  // The HMAC key for `X-Hub-Signature-256`. Newer than this list, and the most damaging
+  // of the four to leak: anyone holding it can forge a webhook delivery and inject a
+  // message attributed to any tenant. Added after Wave 3.
+  'WHATSAPP_APP_SECRET',
+  // Direct Postgres credentials. They bypass PostgREST and therefore every policy in
+  // `0002`, so a leak here is not a tenant-isolation failure — it is the absence of one.
+  'DATABASE_URL',
+  'SUPABASE_DB_PASSWORD',
   'RESEND_API_KEY',
   'GOOGLE_CLIENT_SECRET',
   'NVIDIA_API_KEY',

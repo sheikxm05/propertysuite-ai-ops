@@ -23,6 +23,26 @@ a property owner the contact details of every tenant in their building, through 
 that looks like it is only about leases. An absent `tenant` key on an owner's response
 is the matrix being enforced, not a missing feature.
 
+### Where the embedded tenant's `email` and `phone` come from
+
+Not from a `select`. Migration `0004_agentic.sql` revoked `SELECT` on `tenants.email`
+and `tenants.phone` from **every** role, staff included: row level security filters rows
+and not columns, and all five application roles share the one Postgres role
+`authenticated`, so no policy could express the matrix's "name only, via assignment" for
+a `service_provider`. The columns now have a single read path — the `security definer`
+RPC `tenant_contact(p_organization_id, p_tenant_id)`, which checks `is_org_staff()` and
+raises `42501` otherwise.
+
+`loadEmbeddedTenant()` therefore delegates to `getTenantById()` in
+`features/tenants/server`, which already hydrates through that RPC — the hydration is
+not copied into this lane. One call per request, with `p_tenant_id: null` meaning "every
+tenant in this organization you may see", which is what lets a page of embeds resolve in
+one round trip rather than one per row.
+
+A caller the RPC refuses keeps `null` for both fields, and there is **no fallback**: a
+`property_owner` is turned away by the projection gate before the RPC is reached, and a
+`service_provider` is refused the tenancy itself. That is the point of the change.
+
 ## Lifecycle
 
 ```

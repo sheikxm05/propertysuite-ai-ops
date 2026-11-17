@@ -1,22 +1,30 @@
 ---
 name: propertysuite-wave
-description: Orchestration procedure for running a wave of six PropertySuite lane agents in parallel - pre-flight checks, launching all six with their briefings, resolving planning defects centrally, merge order, and verifying the wave exit gate before the next wave starts. Use when asked to launch a wave, spin up the agents, run wave 0/1/2, merge lane branches, or check whether a wave can close. Also covers the hard prohibition on creating Artifacts.
+description: Orchestration procedure for running a wave of PropertySuite lane agents in parallel - the standing background-agent dispatch rule (always delegate, 5-6 concurrently, disjoint paths), how to write a lane brief, pre-flight checks, resolving planning defects centrally, merge order, and verifying the wave exit gate. Use when asked to launch a wave, spin up or deploy agents, run work in parallel/in the background, run wave 0/1/2/3, merge lane branches, or check whether a wave can close. Also covers the hard prohibition on creating Artifacts.
 ---
 
-# Orchestrating a wave of six
+# Orchestrating a wave
 
-Three waves, six lanes each, eighteen agent tasks. Lanes inside a wave are fully
-parallel; **waves are barriers.** A wave merges and its gate passes before the next
-launches.
+Lanes inside a wave are fully parallel; **waves are barriers.** A wave merges and its
+gate passes before the next launches. `lanes.json` is the live count — read it rather
+than trusting a number written here.
 
 | Wave | Theme                                         | Gate                                                                                 |
 | ---- | --------------------------------------------- | ------------------------------------------------------------------------------------ |
 | 0    | Contracts, security core, test infrastructure | Migrations clean and idempotent; RLS isolation suite green; typecheck and lint green |
-| 1    | Six feature verticals                         | Every lane's tests green; ownership clean on all six diffs; RLS suite still green    |
+| 1    | Six feature verticals                         | Every lane's tests green; ownership clean on every diff; RLS suite still green       |
 | 2    | Cross-cutting completion and demo             | Every release gate in `docs/test-plan.md` green                                      |
+| 3    | Agentic capabilities — RAG, webhooks, tools   | New surfaces reachable from the nav and live; isolation suite still green            |
+
+Wave 3 earns a note the others do not. It adds tables, and **a new table is a new way to
+leak.** Migration 0004 added five; every one of them had to be registered in the policy
+parity harness, and four safety gates failed until they were. That failure was the
+system working. The rule it leaves behind: _a migration that adds a table is not
+finished when it applies — it is finished when the harness knows about the table._
 
 Authoritative sources: `lanes.json` (ownership), `docs/parallel-execution-plan.md`
-(plan and interface freeze), `docs/agent-briefings.md` (the eighteen prompts).
+(plan, interface freeze, §5.8 amendment log, §5.9 carried gaps),
+`docs/agent-briefings.md` (the per-lane prompts).
 
 ## Absolute prohibition
 
@@ -25,6 +33,74 @@ dashboards, merge reports, gate evidence or demo pages. No artifact pages, hoste
 previews or shareable links, ever, for any part of this project. Status goes in the
 terminal; durable records go in `docs/` as Markdown. No exceptions. Enforced in
 `CLAUDE.md` and by `permissions.deny` in `.claude/settings.json`.
+
+## Standing dispatch rule — delegate by default
+
+**The user has asked for this explicitly and it does not expire: do the work through
+background agents, 5–6 at a time, every time.** Treat "do X" as "dispatch X," not as
+"start editing." You are an orchestrator; the keyboard is not yours.
+
+Dispatch when the work decomposes into independent pieces — which is nearly always,
+because this repo is _built_ to decompose. Do it yourself only when delegation is
+genuinely worse:
+
+- The interface freeze (§5 of the plan). Six agents build against it simultaneously, so
+  a wrong freeze costs six re-dos. **Never delegate this.**
+- Applying a migration to the live database. One writer, and it is you.
+- Deciding a planning defect, amending `lanes.json`, merging, calling a gate.
+- A single-file edit smaller than the brief that would describe it.
+
+### Shape of a dispatch
+
+Split the remaining work by **owned path**, not by topic. Paths are what collide;
+topics are not. Before launching, say the path sets out loud and check they are
+disjoint — two agents under one directory is a map defect you are creating by hand.
+
+Launch **all of them in one message**, as several tool calls together. Launched one per
+message, they run in sequence and you have gained nothing but overhead.
+
+Size the fleet to the seams in the work, not to a number. Five or six is the usual
+answer because that is how many disjoint path sets this repo tends to offer. Four real
+seams beat six invented ones; do not manufacture a sixth lane to hit a quota.
+
+### Writing the brief
+
+A background agent sees none of your conversation. Everything it needs is in the brief
+and in the files it can read. The briefs that work here share a shape:
+
+1. **The one path it owns**, and "everything else is read-only," stated plainly.
+2. **Who else is running right now** — so it does not fix a neighbour's file in passing.
+3. **The failing output verbatim.** Paste the actual test failure or error. An agent
+   given symptoms reproduces them; an agent given a paraphrase guesses.
+4. **Why the thing is the way it is.** The reasoning this codebase is full of — RLS
+   filters rows not columns; a proposal has no UPDATE path on purpose; an unmatched
+   message refuses to guess. Without it an agent "fixes" a deliberate constraint.
+5. **What must still be true afterwards** — name the property being protected, so the
+   agent knows which direction it may not take. The most common bad outcome here is a
+   safety gate weakened until it passes.
+6. **Evidence to paste back**, verbatim, not summarised.
+7. The prohibitions: no Artifact, no new dependency, no git commands, no writing outside
+   the owned path.
+
+Tell an agent to report a defect rather than reach outside its path — including when the
+fix is one line in a neighbour's file. That report is the mechanism working, and it has
+already caught collisions that would otherwise have surfaced on camera.
+
+### While they run
+
+Do not read a background agent's transcript file to peek at progress — it is the full
+JSONL and it will flood your context. Wait for the completion notification.
+
+Keep working while they do: the live database, the deployment, the next wave's freeze.
+Idling until all six return wastes the parallelism you just paid for.
+
+Never predict or report a running agent's results. If asked, say it is still running.
+
+### When they come back
+
+Verify; do not take a self-report at face value. Re-run the check yourself if the
+evidence pasted back is thin or absent — a confident summary is not a passing test.
+Then report what is actually true, including what is still broken.
 
 ## Pre-flight — before Wave 0 only
 
@@ -40,18 +116,24 @@ terminal; durable records go in `docs/` as Markdown. No exceptions. Enforced in
 
 ## Launching a wave
 
-For each of the six lanes in the wave:
+For each lane in the wave:
 
 1. Take the **Common Preamble** from `docs/agent-briefings.md`.
 2. Append that lane's briefing block. Nothing else.
-3. Launch on branch `lane/<id>`, in its own git worktree so agents cannot see each
-   other's dirty trees.
+3. Launch as a background agent. Branch-per-lane in a separate worktree is the ideal;
+   in practice these agents run **in the shared tree**, which works only because the
+   path sets are disjoint. That makes step 1's disjointness check load-bearing rather
+   than ceremonial.
 4. Set `CLAUDE_LANE=<id>` in the agent's environment to activate the PreToolUse
    ownership guard.
 
-Launch all six in one go so they actually run concurrently.
+Launch all of them in one message so they actually run concurrently.
 
-**Give each agent only its own lane.** Do not paste the other five briefings "for
+When lanes share a tree, authorship of a given change is unattributable by git alone —
+use `node scripts/check-lane-ownership.mjs --shared-tree` (it exists for exactly this)
+rather than `--lane <id> --base main`, which assumes a branch per lane.
+
+**Give each agent only its own lane.** Do not paste the other briefings "for
 context" — that is how an agent decides to be helpful in someone else's territory.
 
 ## While the wave runs

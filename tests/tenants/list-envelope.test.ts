@@ -34,8 +34,11 @@ import { membership, seedTables, testLogger } from './_support/fixtures';
 import type { MemberRole } from '@shared/index';
 
 function context(role: MemberRole): DataContext {
-  const fake = createFakeClient({ tables: seedTables() });
-  return { supabase: fake.client, membership: membership(role), logger: testLogger() };
+  const who = membership(role);
+  // `caller` is what the fake's `tenant_contact` authorises against — the list path
+  // hydrates contact details through it. Same object as the service's membership.
+  const fake = createFakeClient({ tables: seedTables(), caller: who });
+  return { supabase: fake.client, membership: who, logger: testLogger() };
 }
 
 describe('pageBody', () => {

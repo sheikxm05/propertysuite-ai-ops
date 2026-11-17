@@ -340,6 +340,81 @@
           "exitGate": "README quick start verified from a clean clone; api-contracts.md reconciled with shipped routes; backlog closed out; release-gate evidence recorded."
         }
       ]
+    },
+    {
+      "wave": 3,
+      "name": "Agentic capabilities",
+      "exitGate": "RAG answers with citations, agent proposes but never executes consequential actions unapproved, webhooks idempotent, WhatsApp path works end to end.",
+      "lanes": [
+        {
+          "id": "w3-l1",
+          "title": "Migration 0004 — PII fix, pgvector, webhook idempotency, agent tables",
+          "dependsOn": [],
+          "owns": ["supabase/migrations/0004_agentic.sql"],
+          "readonly": ["supabase/migrations/**", "docs/**"],
+          "exitGate": "Applies clean and idempotent; provider cannot read tenant email/phone."
+        },
+        {
+          "id": "w3-l2",
+          "title": "Chunking and embeddings",
+          "dependsOn": ["w3-l1"],
+          "owns": ["services/rag/**"],
+          "readonly": ["packages/shared/**", "lib/**", "services/ai/**", "docs/**"],
+          "exitGate": "A document is chunked, embedded and stored."
+        },
+        {
+          "id": "w3-l3",
+          "title": "RAG retrieval API and ask UI",
+          "dependsOn": ["w3-l1", "w3-l2"],
+          "owns": ["app/api/v1/rag/**", "features/rag/**", "app/(dashboard)/ask/**"],
+          "readonly": [
+            "packages/shared/**",
+            "lib/**",
+            "services/rag/**",
+            "components/**",
+            "docs/**"
+          ],
+          "exitGate": "A question returns an answer with source citations, org-scoped."
+        },
+        {
+          "id": "w3-l4",
+          "title": "Agent tool-calling core",
+          "dependsOn": ["w3-l1"],
+          "owns": ["services/ai/agent/**", "app/api/v1/ai/agent/**"],
+          "readonly": ["packages/shared/**", "lib/**", "services/ai/**", "features/**", "docs/**"],
+          "exitGate": "Read-only tools execute; consequential tools return a proposal needing approval."
+        },
+        {
+          "id": "w3-l5",
+          "title": "Agent conversation and approval UI",
+          "dependsOn": ["w3-l4"],
+          "owns": ["features/ai-agent/**", "app/(dashboard)/assistant/**"],
+          "readonly": [
+            "packages/shared/**",
+            "lib/**",
+            "services/ai/**",
+            "components/**",
+            "docs/**"
+          ],
+          "exitGate": "A manager sees the proposed action and approves or rejects it."
+        },
+        {
+          "id": "w3-l6",
+          "title": "WhatsApp webhook, idempotency and outbound",
+          "dependsOn": ["w3-l1"],
+          "owns": ["app/api/v1/webhooks/**", "services/integrations/**"],
+          "readonly": ["packages/shared/**", "lib/**", "services/ai/**", "docs/**"],
+          "exitGate": "Signature verified, duplicate event id processed once, outbound adapter works in simulated mode."
+        },
+        {
+          "id": "w3-l7",
+          "title": "Inbox — the demo surface for inbound messages",
+          "dependsOn": ["w3-l1", "w3-l6"],
+          "owns": ["app/(dashboard)/inbox/**", "features/inbox/**", "app/api/v1/inbox/**"],
+          "readonly": ["packages/shared/**", "lib/**", "services/**", "components/**", "docs/**"],
+          "exitGate": "A message appears, is classified, and becomes a ticket after confirmation."
+        }
+      ]
     }
   ]
 }

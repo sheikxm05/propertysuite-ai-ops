@@ -985,6 +985,174 @@ export type Database = {
           },
         ];
       };
+
+      /* ================================================================== */
+      /* 0004 - agentic capabilities                                        */
+      /* ================================================================== */
+
+      /**
+       * Retrieval index over `documents.extracted_text`.
+       *
+       * `embedding` is `halfvec(2048)` and is intentionally absent from Row: it is never
+       * selected by the application (only compared inside `search_document_chunks`) and
+       * is written as a pgvector literal string.
+       */
+      document_chunks: {
+        Row: {
+          id: string;
+          organization_id: string;
+          document_id: string;
+          chunk_index: number;
+          content: string;
+          token_count: number | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          organization_id: string;
+          document_id: string;
+          chunk_index: number;
+          content: string;
+          token_count?: number | null;
+          embedding?: string;
+          created_at?: string;
+        };
+        Update: {
+          content?: string;
+          token_count?: number | null;
+          embedding?: string;
+        };
+        Relationships: [];
+      };
+
+      /**
+       * The idempotency gate for inbound webhooks. `unique (provider, event_id)` is the
+       * whole mechanism: a replayed delivery is rejected by Postgres with 23505 rather
+       * than by application logic, so it survives concurrent retries and a cold start.
+       * RLS enabled with zero policies - service role only.
+       */
+      webhook_events: {
+        Row: {
+          id: string;
+          provider: string;
+          event_id: string;
+          payload: Json | null;
+          status: string;
+          received_at: string;
+          processed_at: string | null;
+          error: string | null;
+        };
+        Insert: {
+          id?: string;
+          provider: string;
+          event_id: string;
+          payload?: Json | null;
+          status?: string;
+          received_at?: string;
+          processed_at?: string | null;
+          error?: string | null;
+        };
+        Update: {
+          status?: string;
+          processed_at?: string | null;
+          error?: string | null;
+        };
+        Relationships: [];
+      };
+
+      /**
+       * A message that arrived over WhatsApp or the simulator.
+       *
+       * `organization_id` is NULLABLE on purpose: a number that cannot be mapped to
+       * exactly one tenant stays unattributed with status `unmatched`. Guessing would
+       * cross the isolation boundary this project exists to defend.
+       */
+      inbound_messages: {
+        Row: {
+          id: string;
+          organization_id: string | null;
+          provider: string;
+          external_message_id: string;
+          from_identifier: string;
+          body: string;
+          received_at: string;
+          status: string;
+          ticket_id: string | null;
+        };
+        Insert: {
+          id?: string;
+          organization_id?: string | null;
+          provider: string;
+          external_message_id: string;
+          from_identifier: string;
+          body: string;
+          received_at?: string;
+          status?: string;
+          ticket_id?: string | null;
+        };
+        Update: {
+          organization_id?: string | null;
+          status?: string;
+          ticket_id?: string | null;
+        };
+        Relationships: [];
+      };
+
+      agent_runs: {
+        Row: {
+          id: string;
+          organization_id: string;
+          actor_profile_id: string | null;
+          input: string;
+          status: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          organization_id: string;
+          actor_profile_id?: string | null;
+          input: string;
+          status?: string;
+          created_at?: string;
+        };
+        Update: { status?: string };
+        Relationships: [];
+      };
+
+      /**
+       * A consequential action the model wants to take.
+       *
+       * There is deliberately NO client UPDATE privilege and no UPDATE policy: a
+       * proposal becomes `approved` only through `approve_agent_proposal`, which checks
+       * `is_org_staff()`. `Update` is declared `never` so the type system refuses what
+       * the database would refuse anyway.
+       */
+      agent_proposals: {
+        Row: {
+          id: string;
+          organization_id: string;
+          run_id: string;
+          tool_name: string;
+          arguments: Json;
+          rationale: string;
+          status: string;
+          decided_by: string | null;
+          decided_at: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          organization_id: string;
+          run_id: string;
+          tool_name: string;
+          arguments: Json;
+          rationale: string;
+          status?: string;
+          created_at?: string;
+        };
+        Update: { [_ in never]: never };
+        Relationships: [];
+      };
     };
     Views: { [_ in never]: never };
     Functions: {
@@ -1109,6 +1277,66 @@ export type Database = {
        */
       revoke_invitation: {
         Args: { p_invitation_id: string };
+        Returns: Json;
+      };
+
+      /* ---------------------------------------------------------------- */
+      /* 0004 - agentic capabilities                                      */
+      /* ---------------------------------------------------------------- */
+
+      /**
+       * Tenant contact details, staff only.
+       *
+       * Exists because 0004 revoked SELECT on `tenants.email` and `tenants.phone` for
+       * EVERY role: RLS filters rows, not columns, and all five app roles share the one
+       * Postgres role `authenticated`, so a service provider could otherwise read a
+       * tenant contact record straight through PostgREST. Raises 42501 for a caller who
+       * is not staff of the organization.
+       *
+       * `p_tenant_id` may be null, meaning every tenant in the organization the caller
+       * may see - so a list page hydrates in one round trip rather than one per row.
+       */
+      tenant_contact: {
+        Args: { p_organization_id: string; p_tenant_id?: string | null };
+        Returns: { tenant_id: string; email: string | null; phone: string | null }[];
+      };
+
+      /** Whether the caller may read a document. Mirrors the 0002 documents policies. */
+      can_read_document: {
+        Args: { p_organization_id: string; p_document_id: string };
+        Returns: boolean;
+      };
+
+      /**
+       * Org-scoped similarity search over `document_chunks`.
+       *
+       * Filters by organization AND document visibility BEFORE ranking - a retriever
+       * that ranks first and filters second leaks other organizations content through
+       * the ranking itself. `p_query` is a pgvector literal string. Raises 28000 when
+       * called with the service role, because it must run as a real principal.
+       */
+      search_document_chunks: {
+        Args: {
+          p_organization_id: string;
+          p_query: string;
+          p_limit: number;
+          p_document_id?: string | null;
+        };
+        Returns: {
+          chunk_id: string;
+          document_id: string;
+          content: string;
+          distance: number;
+        }[];
+      };
+
+      approve_agent_proposal: {
+        Args: { p_id: string };
+        Returns: Json;
+      };
+
+      reject_agent_proposal: {
+        Args: { p_id: string };
         Returns: Json;
       };
     };

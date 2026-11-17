@@ -115,8 +115,16 @@ export const DEAD_LETTER_JOB_STATUS = 'dead' as const satisfies JobStatus;
 export const INVITATION_STATUSES = ['pending', 'accepted', 'revoked'] as const;
 export type InvitationStatus = (typeof INVITATION_STATUSES)[number];
 
-/** `jobs.type` — the job kinds this build enqueues. */
-export const JOB_TYPES = ['document_extraction'] as const;
+/**
+ * `jobs.type` — the job kinds this build enqueues.
+ *
+ * `whatsapp_inbound` added after Wave 3. `jobs.type` carries no CHECK constraint, so its
+ * absence here was invisible at runtime: `inbound-job.ts` wrote `'whatsapp_inbound' as
+ * JobType`, the cast silenced the compiler, and the queue worked. A cast that asserts
+ * something untrue is the failure, not the symptom -- the union is meant to be the list
+ * of kinds that exist, and a reader consulting it would have been told wrongly.
+ */
+export const JOB_TYPES = ['document_extraction', 'whatsapp_inbound'] as const;
 export type JobType = (typeof JOB_TYPES)[number];
 
 /**

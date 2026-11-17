@@ -38,7 +38,7 @@ import {
   type ResourceType,
 } from '@/lib/auth/authorize';
 import type { Membership } from '@/lib/auth/roles';
-import { parsePolicies, TENANT_SCOPED_TABLES } from './tables';
+import { parsePolicies, parseRlsEnabledTables, TENANT_SCOPED_TABLES } from './tables';
 
 /* ------------------------------------------------------------- the mapping -- */
 
@@ -75,6 +75,85 @@ const INTENTIONALLY_UNMAPPED: Readonly<Record<string, string>> = {
   organization_invitations: 'amendment A4: RPC-written, admin-read; no authorize() path',
   objects: 'storage.objects: path-derived authorization, not a routed resource',
   jobs: 'service-role-only infrastructure, no tenant scope',
+
+  // Migration 0004 (lane w3-l1). `authorize()` is lane w0-l5's file and its
+  // ResourceType union names one resource per §4 table; 0004's tables arrived
+  // afterwards and have no resource there, so none of them can be mapped yet. Each is
+  // recorded here with what it would take to map it, rather than left to be discovered
+  // by whoever next reads a green run as proof of parity. These four are asserted in
+  // NEITHER direction, which is exactly why the ledger prints them on every run.
+  document_chunks:
+    '0004 retrieval index. Its one policy is a bare EXISTS against public.documents, so ' +
+    'a chunk is readable by exactly whoever may read its parent — the parity that ' +
+    'matters is already asserted on `document`. There is no client write path and no ' +
+    'route calls authorize() on a chunk; retrieval goes through the security definer ' +
+    'search_document_chunks(). Map it to a `document_chunk` ResourceType only if a ' +
+    'route ever reads chunks directly.',
+  inbound_messages:
+    '0004 inbox. Written by the webhook handler with the service role, read by staff ' +
+    'through one policy. organization_id is NULLABLE — an unattributed message belongs ' +
+    'to no organization — and authorize() has no way to express "no organization", so ' +
+    'a mapping would have to lie about the one property that matters most here. If the ' +
+    'inbox ever gains a routed mutation, that is the point to add the ResourceType.',
+  agent_runs:
+    '0004 agent invocations. Staff select/insert/update, with actor_profile_id pinned ' +
+    'to current_profile_id() by the INSERT policy. No authorize() resource exists for ' +
+    'it; the agent route is lane w3-l*`s and gates on membership, not on a ResourceRef.',
+  agent_proposals:
+    '0004 proposal surface. Deliberately has NO update policy and NO update privilege: ' +
+    'the only transition into `approved` is approve_agent_proposal(), security definer ' +
+    'and is_org_staff()-checked, so the app-space grant that would need a backing ' +
+    'policy does not exist and must not be invented. harness.test.ts asserts that ' +
+    'absence statically; tests/rls asserts it live.',
+
+  // Migration 0006, the outbound ledger. `authorize()` is lane w0-l5's file and its
+  // ResourceType union names one resource per §4 table; `outbound_message` is not among
+  // them, and this lane must not add it (CLAUDE.md rule 2). Recorded here rather than
+  // left to be discovered by whoever next reads a green run as proof of parity.
+  outbound_messages:
+    '0006 record of what we SENT a tenant on WhatsApp. ONE policy — staff of the owning ' +
+    'organization may SELECT, via is_org_staff() — and no client write path at all: no ' +
+    'INSERT, UPDATE or DELETE policy and no such privilege, because sending is a ' +
+    'service-role / security-definer path. authorize() has no `outbound_message` ' +
+    'ResourceType and adding one is lane w0-l5`s to do, not this lane`s, so neither ' +
+    'parity direction can be asserted here yet. There is also nothing yet to assert: ' +
+    'authorize() answers "may this member do this to this row", and the only client ' +
+    'operation that exists is a staff read already implied by membership. Map it to an ' +
+    '`outbound_message` ResourceType the moment a route reads or composes one directly ' +
+    '— at which point the app -> SQL direction becomes the gate that matters, since a ' +
+    'create/update grant there would have NO backing policy by design and must show up ' +
+    'in RPC_MEDIATED_WRITES naming the send function. Until then the static gates in ' +
+    'harness.test.ts carry it: they assert the single SELECT policy, the is_org_staff() ' +
+    'predicate, the absent write policies, the revoked write privileges, the NOT NULL ' +
+    'organization_id and the one-acknowledgement-per-inbound-message index.',
+
+  webhook_events:
+    '0004 idempotency gate, `unique (provider, event_id)`. NOT organization-scoped by ' +
+    'design — a delivery arrives before anyone knows whose it is — with row level ' +
+    'security enabled and ZERO policies, and every privilege revoked from anon and ' +
+    'authenticated. Service role only, so there is nothing for authorize() to gate. ' +
+    'Raw third-party payloads may carry personal data. It has no policies at all, so ' +
+    'it cannot reach the ledger below; the gate that holds it to that is the ' +
+    '"earned its exclusion" test in harness.test.ts, which fails the moment a policy ' +
+    'or a client grant appears on it.',
+
+  // Migration 0005 (lane w3-l*), the platform-operator plane. Both tables sit OUTSIDE
+  // every organization by construction, which is also why neither has an authorize()
+  // resource: authorize() answers "may this member of this organization do this to this
+  // row", and an operator is a member of no organization. The gate that holds these two
+  // to their shape is in harness.test.ts, not here.
+  platform_operators:
+    '0005 operator grant list. One self-scoped SELECT policy: a caller may learn ' +
+    'whether THEY are an operator, and nothing else — the roster is not enumerable. No ' +
+    'organization_id at all, so there is no membership for authorize() to reason about; ' +
+    'the triage routes gate on is_platform_operator(), which additionally requires the ' +
+    'caller to be a member of NO organization.',
+  platform_operator_events:
+    "0005 the operator plane's append-only audit trail. No policies at all and every " +
+    'privilege revoked from anon and authenticated, so it cannot reach the ledger ' +
+    'below; recorded here so the table is accounted for in writing. The gate that ' +
+    'fails if a policy or a client grant ever appears on it is "every table excluded ' +
+    'from the registry has earned its exclusion" in harness.test.ts.',
 };
 
 /** SQL command to the app-space actions that imply it. */
@@ -224,6 +303,52 @@ describe('the two authorization layers describe the same tables', () => {
       orphans,
       'authorize() models a resource that no migration protects with a policy. Either ' +
         'RLS is missing for it, or the resource type is dead code — both are drift.',
+    ).toEqual([]);
+  });
+
+  it('never both maps a table and excuses it', () => {
+    const both = Object.keys(INTENTIONALLY_UNMAPPED).filter(
+      (t) => TABLE_TO_RESOURCE[t] !== undefined,
+    );
+    expect(
+      both,
+      'A table is in TABLE_TO_RESOURCE and in INTENTIONALLY_UNMAPPED at once. The ' +
+        'excuse wins by accident in some reads and the mapping in others, so delete one.',
+    ).toEqual([]);
+  });
+
+  it('excuses no table that authorize() has since learned to model', () => {
+    // The dangerous way an excuse rots: `authorize()` gains the resource later, the
+    // written reason ("no authorize() path") quietly becomes false, and the table stays
+    // out of BOTH parity directions on the strength of a comment nobody re-read.
+    //
+    // Matched on the table name singularised, which is how every existing mapping is
+    // named (`properties` -> `property`, `ai_messages` -> `ai_message`). A resource
+    // named some other way would slip past this, so it is a second line of defence
+    // rather than the gate itself — the gate is that the table has no policies the
+    // first test can see, or a mapping.
+    const modelled = new Set<string>(knownResourceTypes());
+    const stale = Object.keys(INTENTIONALLY_UNMAPPED).filter((table) =>
+      modelled.has(table.replace(/s$/, '')),
+    );
+    expect(
+      stale,
+      'authorize() now models a resource named after a table recorded as having no ' +
+        'authorize() path. Move it into TABLE_TO_RESOURCE so both parity directions ' +
+        'start asserting it.',
+    ).toEqual([]);
+  });
+
+  it('excuses no table that no migration mentions', () => {
+    // A reason written for a table that no longer exists is not harmless: it is a
+    // silencer waiting for a future table to be given the same name.
+    const known = new Set([...policies.map((p) => p.table), ...parseRlsEnabledTables()]);
+    const phantom = Object.keys(INTENTIONALLY_UNMAPPED).filter((t) => !known.has(t));
+    expect(
+      phantom,
+      'INTENTIONALLY_UNMAPPED names a table that no migration creates a policy on or ' +
+        'enables row level security on. Remove the entry rather than leaving a ' +
+        'pre-authorised excuse lying around.',
     ).toEqual([]);
   });
 

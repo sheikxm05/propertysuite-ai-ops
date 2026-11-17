@@ -51,15 +51,16 @@ interface Harness {
 
 function harness(role: MemberRole, options: { foreign?: boolean } = {}): Harness {
   const tables = seedTables();
-  const fake = createFakeClient({ tables });
+  const who = options.foreign ? foreignMembership(role) : membership(role);
+  // The same membership on both sides. `tenant_contact` is `security definer` and reads
+  // its own caller, so the fake has to be told who that is; handing it the very object
+  // the service receives means a test cannot accidentally grant the fake a role the
+  // service was not given.
+  const fake = createFakeClient({ tables, caller: who });
   const logs = testLogger();
 
   return {
-    ctx: {
-      supabase: fake.client,
-      membership: options.foreign ? foreignMembership(role) : membership(role),
-      logger: logs,
-    },
+    ctx: { supabase: fake.client, membership: who, logger: logs },
     fake,
     tables,
     logs,
@@ -261,6 +262,157 @@ describe('getTenantById', () => {
       'NOT_FOUND',
       404,
     );
+  });
+});
+
+/* ------------------------------------------- migration 0004: contact details -- */
+
+/**
+ * The column boundary, after `0004_agentic.sql` moved it out of the application layer.
+ *
+ * Before 0004 the only thing between a `service_provider` and an assigned tenant's phone
+ * number was `projectionFor()` — correct, and bypassable, because the anon key is public
+ * by design and a provider holds a real JWT, so PostgREST could be called directly. 0004
+ * revoked SELECT on `tenants.email` and `tenants.phone` for every role and left one read
+ * path, `tenant_contact()`, which checks `is_org_staff()`.
+ *
+ * These tests measure the fake against that migration rather than the service against the
+ * fake. That is deliberate: every projection assertion in this file is only worth the
+ * fidelity of the stand-in underneath it. A fake that answered `tenant_contact` for all
+ * callers would make the provider's name-only view pass no matter what the service did —
+ * a lie in exactly the direction the migration exists to prevent — and a fake that served
+ * `email` from a plain `select` would let a regression reach production green.
+ */
+describe('migration 0004 — tenant contact details', () => {
+  /** A loosely typed handle on the fake, for calling it the way PostgREST would. */
+  function raw(fake: FakeClient) {
+    return fake.client as unknown as {
+      from(table: string): {
+        select(list: string): PromiseLike<{ data: unknown; error: { code: string } | null }>;
+      };
+      rpc(
+        name: string,
+        args: Record<string, unknown>,
+      ): Promise<{ data: unknown; error: { code: string } | null }>;
+    };
+  }
+
+  it('raises 42501 for a select naming email or phone on tenants', async () => {
+    const { fake } = harness('property_manager');
+
+    for (const list of ['id, email', 'id, phone', 'id, full_name, email, phone']) {
+      const { data, error } = await raw(fake).from('tenants').select(list);
+
+      // Not "returns the row without the column" — the statement itself is refused, for
+      // staff as much as for anybody else. A regression that reinstated a direct column
+      // read would fail here rather than 403 in production.
+      expect(error?.code).toBe('42501');
+      expect(data).toEqual([]);
+    }
+  });
+
+  it('still allows the five granted columns', async () => {
+    const { fake } = harness('property_manager');
+
+    const { error } = await raw(fake)
+      .from('tenants')
+      .select('id, organization_id, profile_id, full_name, created_at');
+
+    expect(error).toBeNull();
+  });
+
+  it('answers tenant_contact for staff, scoped to their organization', async () => {
+    const { fake } = harness('property_manager');
+
+    const { data, error } = await raw(fake).rpc('tenant_contact', {
+      p_organization_id: ORG_A,
+      p_tenant_id: null,
+    });
+
+    expect(error).toBeNull();
+    expect(data).toEqual(
+      expect.arrayContaining([
+        { tenant_id: TENANT_ONE, email: 'tariq@example.test', phone: '+971500000001' },
+      ]),
+    );
+    // Organization B's tenant is in the fixture. A security-definer function reads
+    // without RLS, so its organization filter is the only thing withholding this row.
+    expect(JSON.stringify(data)).not.toContain(TENANT_FOREIGN);
+  });
+
+  it('REFUSES tenant_contact to a provider holding the assigned ticket', async () => {
+    const { fake } = harness('service_provider');
+
+    // The exact caller the matrix limits to "R name only, via assignment". The assignment
+    // grants the row; it has never granted the columns.
+    const { data, error } = await raw(fake).rpc('tenant_contact', {
+      p_organization_id: ORG_A,
+      p_tenant_id: TENANT_ONE,
+    });
+
+    expect(error?.code).toBe('42501');
+    expect(data).toBeNull();
+  });
+
+  it('REFUSES tenant_contact to a property owner', async () => {
+    const { fake } = harness('property_owner');
+
+    const { error } = await raw(fake).rpc('tenant_contact', {
+      p_organization_id: ORG_A,
+      p_tenant_id: null,
+    });
+
+    expect(error?.code).toBe('42501');
+  });
+
+  it('REFUSES staff asking about an organization they are not staff of', async () => {
+    const { fake } = harness('property_manager');
+
+    const { error } = await raw(fake).rpc('tenant_contact', {
+      p_organization_id: ORG_B,
+      p_tenant_id: TENANT_FOREIGN,
+    });
+
+    expect(error?.code).toBe('42501');
+  });
+
+  it('answers the tenant themselves with their own row and no other', async () => {
+    const { fake } = harness('tenant');
+
+    // The §4 matrix gives `tenant` "R self only" on `tenants`, and that cell includes
+    // their own contact details — a staff-only accessor would make it unsatisfiable.
+    const { data, error } = await raw(fake).rpc('tenant_contact', {
+      p_organization_id: ORG_A,
+      p_tenant_id: null,
+    });
+
+    expect(error).toBeNull();
+    expect(data).toEqual([
+      { tenant_id: TENANT_ONE, email: 'tariq@example.test', phone: '+971500000001' },
+    ]);
+
+    const neighbour = await raw(fake).rpc('tenant_contact', {
+      p_organization_id: ORG_A,
+      p_tenant_id: TENANT_TWO,
+    });
+    expect(neighbour.error?.code).toBe('42501');
+  });
+
+  it('hydrates a staff list through the RPC rather than through the select list', async () => {
+    const { ctx, fake } = harness('property_manager');
+
+    await listTenants(ctx, defaultQuery);
+
+    for (const query of fake.against('tenants')) {
+      expect(query.select).not.toContain('email');
+      expect(query.select).not.toContain('phone');
+    }
+
+    // One call for the whole page, with the organization taken from membership. The null
+    // tenant id is what makes a list page one round trip instead of one per row.
+    const calls = fake.rpcCalls('tenant_contact');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.payload).toEqual({ p_organization_id: ORG_A, p_tenant_id: null });
   });
 });
 

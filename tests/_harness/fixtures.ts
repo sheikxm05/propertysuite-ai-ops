@@ -30,6 +30,14 @@
  *   notifications   one per principal
  *   audit_logs      one row
  *   invitations     one pending invitation
+ *   chunks          one per document, so a chunk inherits its parent's visibility
+ *   inbound         IM1 attributed, linked to K1; plus ONE global unattributed message
+ *                   with organization_id null, which must be visible to nobody
+ *   agent runs      AR1 started by the admin
+ *   proposals       AP1 pending on AR1 — inert until a human approves it by RPC
+ *   outbound        OM1 the automatic acknowledgement for IM1 (drafted_by system)
+ *                   OM2 the reply a human released (drafted_by ai + sent_by_profile_id)
+ *                   both addressed to T1's own phone, and readable by STAFF ONLY
  *
  * So: the owner sees P1 and everything hanging off it and nothing from P2; the tenant
  * sees only unit 1204 of P1 and their own two tickets; the provider sees exactly K1.
@@ -59,6 +67,38 @@ export interface OrgFixture {
   notifications: Record<string, string>;
   auditLogs: { al1: string };
   invitations: { inv1: string };
+  /**
+   * Migration 0004. One chunk per seeded document, so a chunk inherits exactly the
+   * visibility of its parent: `d1` is staff + owner-of-P1 + tenant-of-TC1, `d2` is
+   * staff + tenant2, `evidence` is staff + the assigned provider.
+   */
+  documentChunks: { d1: string; d2: string; evidence: string };
+  /**
+   * `im1` is attributed to this organization and linked to ticket K1.
+   *
+   * `unattributed` is the SAME row id in both organizations on purpose: it is one
+   * global row with `organization_id is null`, the message from a sender the resolver
+   * could not map to exactly one tenant. It must be visible to NOBODY, so it is the
+   * in-organization negative for the staff read.
+   */
+  inboundMessages: { im1: string; unattributed: string };
+  agentRuns: { ar1: string };
+  agentProposals: { ap1: string };
+  /**
+   * Migration 0006. What we SENT this organization's tenant, on their phone.
+   *
+   * `om1` is the automatic acknowledgement for `im1` — `kind='acknowledgement'`,
+   * `drafted_by='system'`, nobody's name on it. `om2` is the reply a human released:
+   * `drafted_by='ai'` with `sent_by_profile_id` set, which is the pair that records
+   * CLAUDE.md rule 7 actually happening. Two rows rather than one because collapsing
+   * them would leave the provenance columns untested by anything.
+   *
+   * Both are addressed to tenant T1 at `tenantPhones[0]`, which is what makes the
+   * tenant negative sharp: the tenant looks for a message sent to their own number,
+   * about their own ticket, and still gets nothing. They have it on WhatsApp; the row
+   * is staff infrastructure.
+   */
+  outboundMessages: { om1: string; om2: string };
   /** Object paths seeded into the private bucket, `{org}/{entity}/{uuid}.pdf`. */
   objects: { d1: string; d2: string };
 }
@@ -88,6 +128,19 @@ export const SHARED_SHAPE = {
   documentType: 'tenancy_contract',
   auditAction: 'tenancy.created',
   aiMessage: 'The air conditioning in my apartment has stopped cooling since yesterday.',
+  // Migration 0004. Identical in both organizations, like everything else here: a
+  // leaked chunk, message or proposal must be impossible to tell from one the caller is
+  // entitled to, so only an identifier comparison can catch it.
+  chunkContent:
+    'Clause 7.2 — The landlord shall maintain the air conditioning system in working order.',
+  inboundMessageBody: 'The AC in 1204 is still not cooling. Can someone come today?',
+  agentInstruction: 'Summarise the open maintenance tickets for Marina Heights Tower.',
+  proposalTool: 'create_maintenance_ticket',
+  // Migration 0006. Identical in both organizations for the same reason as everything
+  // else here: if the outbound ledger leaks, the leaked row must be indistinguishable
+  // from one the caller is entitled to, so only an identifier comparison can catch it.
+  outboundAcknowledgementBody: 'Thanks — we have logged your request and will be in touch.',
+  outboundStaffReplyBody: 'A technician is booked for tomorrow between 9am and 11am.',
 } as const;
 
 const ORG_KEYS: readonly OrgKey[] = ['A', 'B'];
@@ -118,6 +171,21 @@ function ids(factory: JwtFactoryModule, org: OrgKey) {
     messages: { m1: id('message:1'), m2: id('message:2') },
     auditLogs: { al1: id('audit:1') },
     invitations: { inv1: id('invitation:1') },
+    documentChunks: {
+      d1: id('chunk:document:1'),
+      d2: id('chunk:document:2'),
+      evidence: id('chunk:document:evidence'),
+    },
+    inboundMessages: {
+      im1: id('inbound_message:1'),
+      // Deliberately NOT organization-keyed: there is one unattributed message in the
+      // whole database, belonging to neither organization. Seeded on both passes (the
+      // second is an idempotent no-op) so either organization's fixture can name it.
+      unattributed: factory.fixtureId('shared:inbound_message:unattributed'),
+    },
+    agentRuns: { ar1: id('agent_run:1') },
+    agentProposals: { ap1: id('agent_proposal:1') },
+    outboundMessages: { om1: id('outbound_message:1'), om2: id('outbound_message:2') },
   };
 }
 
@@ -538,6 +606,135 @@ async function seedOrganization(
     },
   ]);
 
+  /* ----------------------------------------------- migration 0004, agentic -- */
+
+  // One chunk per document. `embedding` is left null on purpose: the column is
+  // nullable because the worker writes content and embedding in separate passes, and
+  // no assertion in this suite ranks anything — they all ask who may READ a chunk.
+  await setup.upsert(
+    'document_chunks',
+    [
+      { id: f.documentChunks.d1, document: f.documents.d1 },
+      { id: f.documentChunks.d2, document: f.documents.d2 },
+      { id: f.documentChunks.evidence, document: f.documents.evidence },
+    ].map(({ id, document }) => ({
+      id,
+      organization_id: f.organizationId,
+      document_id: document,
+      chunk_index: 0,
+      content: SHARED_SHAPE.chunkContent,
+      token_count: 24,
+    })),
+  );
+
+  await setup.upsert('inbound_messages', [
+    {
+      id: f.inboundMessages.im1,
+      organization_id: f.organizationId,
+      provider: 'whatsapp',
+      // Globally unique by (provider, external_message_id), so the organization key has
+      // to be in it. The SENDER is identical in both organizations, which is the point:
+      // the same phone number reaching two organizations is exactly the case where a
+      // resolver that guesses would cross the boundary.
+      external_message_id: `wamid.fixture.${org}.1`,
+      from_identifier: SHARED_SHAPE.tenantPhones[0],
+      body: SHARED_SHAPE.inboundMessageBody,
+      status: 'linked',
+      ticket_id: f.tickets.k1,
+    },
+    {
+      // The row that belongs to nobody. Written on both passes with identical values,
+      // so the second upsert is a no-op. No organization_id and no ticket_id: the
+      // inbound_messages_ticket_requires_org check refuses to link a ticket before the
+      // organization is known, and the staff policy's `organization_id is not null`
+      // keeps this row out of every organization's inbox.
+      id: f.inboundMessages.unattributed,
+      organization_id: null,
+      provider: 'whatsapp',
+      external_message_id: 'wamid.fixture.shared.unattributed',
+      from_identifier: SHARED_SHAPE.tenantPhones[1],
+      body: SHARED_SHAPE.inboundMessageBody,
+      status: 'unmatched',
+      ticket_id: null,
+    },
+  ]);
+
+  await setup.upsert('agent_runs', [
+    {
+      id: f.agentRuns.ar1,
+      organization_id: f.organizationId,
+      actor_profile_id: admin.profileId,
+      input: SHARED_SHAPE.agentInstruction,
+      status: 'running',
+    },
+  ]);
+
+  // Pending, with no decision attached — the only state a client may create, and the
+  // state the approval RPC is the only exit from.
+  await setup.upsert('agent_proposals', [
+    {
+      id: f.agentProposals.ap1,
+      organization_id: f.organizationId,
+      run_id: f.agentRuns.ar1,
+      tool_name: SHARED_SHAPE.proposalTool,
+      arguments: { property_unit_id: f.units.p1u1, category: 'hvac', priority: 'normal' },
+      rationale: 'The tenant reported that the air conditioning is not cooling.',
+      status: 'pending',
+      decided_by: null,
+      decided_at: null,
+    },
+  ]);
+
+  /* --------------------------------------- migration 0006, outbound ledger -- */
+
+  // Seeded through the privileged client, which is the ONLY way these rows can exist:
+  // there is no client INSERT policy and no INSERT privilege, so a fixture written
+  // with an authenticated principal could not create them at all. That is the control
+  // the suite asserts, not an inconvenience to work around.
+  //
+  // `sent_at` is a fixed instant rather than `now()` so re-seeding an un-reset database
+  // is an upsert of identical values rather than a perpetual diff.
+  await setup.upsert('outbound_messages', [
+    {
+      id: f.outboundMessages.om1,
+      organization_id: f.organizationId,
+      inbound_message_id: f.inboundMessages.im1,
+      tenant_id: f.tenants.t1,
+      to_identifier: SHARED_SHAPE.tenantPhones[0],
+      body: SHARED_SHAPE.outboundAcknowledgementBody,
+      kind: 'acknowledgement',
+      // A fixed string, sent on receipt. No model output and no human in it, which is
+      // why nobody's profile id is attached.
+      drafted_by: 'system',
+      sent_by_profile_id: null,
+      provider: 'whatsapp',
+      provider_message_id: `wamid.out.fixture.${org}.1`,
+      status: 'sent',
+      sent_at: new Date(Date.UTC(2026, 0, 2, 9, 0, 0)).toISOString(),
+    },
+    {
+      id: f.outboundMessages.om2,
+      organization_id: f.organizationId,
+      inbound_message_id: f.inboundMessages.im1,
+      tenant_id: f.tenants.t1,
+      to_identifier: SHARED_SHAPE.tenantPhones[0],
+      body: SHARED_SHAPE.outboundStaffReplyBody,
+      // `staff_reply`, not `acknowledgement`: the partial unique index permits at most
+      // one acknowledgement per inbound message, and a second one here would make the
+      // fixture un-seedable for a reason that has nothing to do with authorization.
+      kind: 'staff_reply',
+      // The pair that records CLAUDE.md rule 7 having happened: the model drafted the
+      // text, and a named human released it. Collapsing `drafted_by` to 'human' on send
+      // would erase the only durable evidence that the confirmation step existed.
+      drafted_by: 'ai',
+      sent_by_profile_id: manager.profileId,
+      provider: 'whatsapp',
+      provider_message_id: `wamid.out.fixture.${org}.2`,
+      status: 'sent',
+      sent_at: new Date(Date.UTC(2026, 0, 2, 9, 5, 0)).toISOString(),
+    },
+  ]);
+
   // Token hash only — never a plaintext token, even in a fixture.
   await setup.upsert('organization_invitations', [
     {
@@ -572,6 +769,11 @@ async function seedOrganization(
     notifications,
     auditLogs: f.auditLogs,
     invitations: f.invitations,
+    documentChunks: f.documentChunks,
+    inboundMessages: f.inboundMessages,
+    agentRuns: f.agentRuns,
+    agentProposals: f.agentProposals,
+    outboundMessages: f.outboundMessages,
     objects: {
       d1: objectPath('tenancies', f.documents.d1),
       d2: objectPath('tenancies', f.documents.d2),

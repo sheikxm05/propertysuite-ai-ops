@@ -47,6 +47,28 @@ export const TENANT_FULL_FIELDS = [
 export type TenantFullField = (typeof TENANT_FULL_FIELDS)[number];
 
 /**
+ * The columns `authenticated` may actually SELECT after migration 0004.
+ *
+ * 0004 revoked table-level SELECT on `tenants` and granted back only these five,
+ * because a `service_provider` could otherwise read every assigned tenant's `email` and
+ * `phone` straight through PostgREST — RLS filters rows, not columns, and all five app
+ * roles share one Postgres role, so no policy could express "name only". The
+ * application-layer projection was correct but bypassable, since the anon key is public
+ * by design and a provider holds a real JWT.
+ *
+ * `email` and `phone` are therefore NOT selectable by anyone, staff included. Staff read
+ * them through the `tenant_contact` security-definer RPC, which checks `is_org_staff()`
+ * — see `hydrateContacts` in `tenant-service.ts`.
+ */
+export const TENANT_GRANTED_FIELDS = [
+  'id',
+  'organization_id',
+  'profile_id',
+  'full_name',
+  'created_at',
+] as const;
+
+/**
  * Compile-time proof that `TENANT_FULL_FIELDS` and `TenantSchema` describe the same
  * column set. If a future migration adds a column to `tenants` and it is added to one
  * of the two but not the other, `tsc --noEmit` fails on this line.
@@ -73,16 +95,30 @@ export interface TenantRowLike {
  * Turns an `authorize()` projection into a PostgREST `select` list.
  *
  * `null` means "every column the row exposes" (`projectionFor`'s contract) and resolves
- * to `TENANT_FULL_FIELDS` — never to `*`. An empty projection means the read was denied
- * and must not have produced a query at all, so it throws rather than selecting nothing.
+ * to `TENANT_GRANTED_FIELDS` — never to `*`, and deliberately NOT to
+ * `TENANT_FULL_FIELDS`. An empty projection means the read was denied and must not have
+ * produced a query at all, so it throws rather than selecting nothing.
  *
- * The intersection with `TENANT_FULL_FIELDS` is the safety net: a projection naming a
- * column that is not on the allowlist cannot smuggle it into the select list.
+ * WHY GRANTED AND NOT FULL. After migration 0004 the `authenticated` role holds SELECT
+ * on five columns; `email` and `phone` are revoked from every role. Naming them in a
+ * select list is no longer an over-fetch to be filtered on the way out — it is a hard
+ * `42501` from Postgres, which `postgresErrorToApiError` turns into a 403. Resolving
+ * `null` to the full list meant every staff detail read failed with "You do not have
+ * access to this resource" against a record they are fully entitled to. Caught by
+ * `tests/tenants` once the fake started mirroring the real grant.
+ *
+ * The intersection with `TENANT_GRANTED_FIELDS` is the safety net, and it now enforces
+ * the grant rather than merely the schema: a projection naming a revoked column cannot
+ * smuggle it into the select list and turn a legitimate read into a 403.
+ *
+ * `TENANT_FULL_FIELDS` keeps all seven because it is the compile-time link to
+ * `TenantSchema` — the serialized shape still carries `email` and `phone`, supplied by
+ * `hydrateContacts` through the `tenant_contact` RPC rather than by the select.
  */
 export function tenantSelectList(projection: readonly string[] | null): string {
-  if (projection === null) return TENANT_FULL_FIELDS.join(', ');
+  if (projection === null) return TENANT_GRANTED_FIELDS.join(', ');
 
-  const allowed = TENANT_FULL_FIELDS.filter((field) => projection.includes(field));
+  const allowed = TENANT_GRANTED_FIELDS.filter((field) => projection.includes(field));
   if (allowed.length === 0) {
     throw new Error('tenantSelectList called with an empty projection');
   }

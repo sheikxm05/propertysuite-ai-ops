@@ -363,6 +363,152 @@ export const POLICY_MATRIX: Readonly<Record<TenantScopedTable, TableSpec>> = Obj
     tenant: NOTHING,
     service_provider: NOTHING,
   },
+
+  /* ------------------------------------------------- migration 0004, agentic -- */
+  //
+  // §4 predates these four tables — 0004 is lane w3-l1's and the document describes
+  // document_chunks only as future scope (implementation-plan.md line 318). So the
+  // specification for the rows below is, in order of authority: CLAUDE.md rules 5
+  // (never trust a client-supplied organization_id), 6 (no DELETE path) and 7 (no model
+  // output reaches a mutation without a human in between), then the stated intent in
+  // 0004's own header. Where that intent and the SQL could drift, the cell is written
+  // from the INTENT, so the suite fails rather than ratifying whatever the SQL does —
+  // which is the same contract every other row in this file is under.
+
+  // A chunk is readable by exactly whoever may read its parent document, expressed in
+  // 0004 as a bare EXISTS against public.documents. So this block is the `documents`
+  // block above with the writes removed: staff organization-wide, owner by property,
+  // tenant by tenancy, provider by assigned ticket. No client write path exists, by
+  // policy and by revoked privilege both.
+  document_chunks: {
+    organization_admin: readOrg(['document_chunks_select_parent_document']),
+    property_manager: readOrg(['document_chunks_select_parent_document']),
+    property_owner: readScoped(['document_chunks_select_parent_document']),
+    tenant: readScoped(['document_chunks_select_parent_document']),
+    service_provider: {
+      ...readScoped(['document_chunks_select_parent_document']),
+      note:
+        'Inherits amendment A7 through the parent document: a provider reads the chunks ' +
+        'of its own completion evidence and nothing else. Same documents.ticket_id ' +
+        'dependency as the `documents` row above.',
+    },
+  },
+
+  // Staff-only read, and `scoped` rather than `org` for one specific reason: an
+  // UNATTRIBUTED message (organization_id is null) belongs to no organization, and the
+  // policy's `organization_id is not null` clause is the only thing keeping it out of
+  // the first organization that asks. Declaring the read `org` would leave that row
+  // with no negative assertion anywhere; declaring it `scoped` makes the suite prove
+  // the unattributed message is invisible even to staff of the organization the sender
+  // probably belongs to. Failing closed is the whole point of the nullable column.
+  inbound_messages: {
+    organization_admin: {
+      ...readScoped(['inbound_messages_select_staff']),
+      note: 'Scope boundary = the unattributed message, which is visible to NO organization.',
+    },
+    property_manager: {
+      ...readScoped(['inbound_messages_select_staff']),
+      note: 'Scope boundary = the unattributed message, which is visible to NO organization.',
+    },
+    property_owner: NOTHING,
+    tenant: NOTHING,
+    service_provider: NOTHING,
+  },
+
+  // A run is started by a human, in their own name. INSERT is `scoped`, not `org`,
+  // because the policy pins actor_profile_id to current_profile_id(): a staff member
+  // cannot attribute a run to a colleague, and the probe proves it by trying.
+  agent_runs: {
+    organization_admin: {
+      select: 'org',
+      insert: 'scoped',
+      update: 'org',
+      delete: false,
+      policies: ['agent_runs_select_staff', 'agent_runs_insert_staff', 'agent_runs_update_staff'],
+      note: 'UPDATE is status bookkeeping only; nothing consequential hangs off a run row.',
+    },
+    property_manager: {
+      select: 'org',
+      insert: 'scoped',
+      update: 'org',
+      delete: false,
+      policies: ['agent_runs_select_staff', 'agent_runs_insert_staff', 'agent_runs_update_staff'],
+    },
+    property_owner: NOTHING,
+    tenant: NOTHING,
+    service_provider: NOTHING,
+  },
+
+  // The decision surface. `update: false` for EVERY role is not an omission and not a
+  // conservatism — it is CLAUDE.md rule 7 expressed as a missing privilege: there is no
+  // UPDATE policy and no UPDATE grant, so the only path from `pending` to `approved` is
+  // approve_agent_proposal(), which is security definer and checks is_org_staff().
+  // harness.test.ts asserts that absence statically; the suite asserts it live.
+  //
+  // INSERT is `scoped` because the policy admits a proposal only as `pending` with no
+  // decision attached. The out-of-scope payload is a proposal born `approved` — the
+  // exact shape of a model committing its own work — and it must be refused.
+  agent_proposals: {
+    organization_admin: {
+      select: 'org',
+      insert: 'scoped',
+      update: false,
+      delete: false,
+      policies: ['agent_proposals_select_staff', 'agent_proposals_insert_staff'],
+      note: 'A pending proposal is inert. Approval is an RPC, never a client UPDATE.',
+    },
+    property_manager: {
+      select: 'org',
+      insert: 'scoped',
+      update: false,
+      delete: false,
+      policies: ['agent_proposals_select_staff', 'agent_proposals_insert_staff'],
+    },
+    property_owner: NOTHING,
+    tenant: NOTHING,
+    service_provider: NOTHING,
+  },
+
+  /* ----------------------------------- migration 0006, the outbound ledger -- */
+
+  // The record of what the organization SENT a tenant. One policy, one operation, one
+  // audience: staff of the owning organization may SELECT, via is_org_staff(). Every
+  // other cell is `none`/`false`, and each `false` is a missing privilege rather than a
+  // missing policy — harness.test.ts asserts that distinction statically, because a
+  // refusal by absent policy is silent (zero rows, HTTP 200) and a refusal by absent
+  // privilege is loud (42501), and only the loud one survives someone later adding a
+  // well-meaning policy.
+  //
+  // `tenant: NOTHING` is the row most likely to be "corrected" by a future reader, so
+  // it is argued rather than asserted. The tenant already HAS the message: it arrived
+  // on their phone, which is the whole point of sending it. What the row adds beyond
+  // the text is `drafted_by` — whether the reply they received was written by a model —
+  // `sent_by_profile_id`, naming the member of staff who released it, and the delivery
+  // state. Disclosing those is disclosing how the organization operates internally, to
+  // the person it operates on. The ledger is staff infrastructure.
+  //
+  // `select: 'org'` rather than `'scoped'` for staff: unlike `inbound_messages`, there
+  // is no unattributed row to be withheld. organization_id is NOT NULL here, deliberately
+  // — an unattributed message is never replied to — so every row belongs to exactly one
+  // organization and the only boundary is the cross-organization one.
+  outbound_messages: {
+    organization_admin: {
+      ...readOrg(['outbound_messages_select_staff']),
+      note: 'Read-only. Sending is a service-role / security-definer path, never a client INSERT.',
+    },
+    property_manager: {
+      ...readOrg(['outbound_messages_select_staff']),
+      note: 'Read-only. Sending is a service-role / security-definer path, never a client INSERT.',
+    },
+    property_owner: NOTHING,
+    tenant: {
+      ...NOTHING,
+      note:
+        'The recipient cannot read the record of the message we sent them. They have ' +
+        'the text already; the row carries provenance and operational state instead.',
+    },
+    service_provider: NOTHING,
+  },
 } as Record<TenantScopedTable, TableSpec>);
 
 export interface MatrixCell {

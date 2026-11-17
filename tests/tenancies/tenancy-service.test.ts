@@ -63,15 +63,24 @@ interface Harness {
   logs: ReturnType<typeof testLogger>;
 }
 
+/**
+ * `caller` is the same `Membership` the service under test is given, and it has to be:
+ * `tenant_contact()` is `security definer`, so it authorises against its own caller
+ * rather than through row level security, and the fake can only answer it if it knows
+ * who is asking. Omitting it modelled an unauthenticated session, which made the RPC
+ * answer `28000` and every hydrated `email`/`phone` come back null — the embedded
+ * tenant's contact details would have looked correctly withheld from staff too.
+ */
 function harness(role: MemberRole, options: { foreign?: boolean } = {}): Harness {
   const tables = seedTables();
-  const fake = createFakeClient({ tables });
+  const caller = options.foreign ? foreignMembership(role) : membership(role);
+  const fake = createFakeClient({ tables, caller });
   const logs = testLogger();
 
   return {
     ctx: {
       supabase: fake.client,
-      membership: options.foreign ? foreignMembership(role) : membership(role),
+      membership: caller,
       logger: logs,
     },
     fake,
@@ -218,10 +227,11 @@ describe('listTenancies', () => {
 
   it('returns an empty page for a tenant with no linked record', async () => {
     const tables = seedTables();
-    const fake = createFakeClient({ tables });
+    const caller = membership('tenant', { tenantId: null });
+    const fake = createFakeClient({ tables, caller });
     const ctx: DataContext = {
       supabase: fake.client,
-      membership: membership('tenant', { tenantId: null }),
+      membership: caller,
       logger: testLogger(),
     };
 
@@ -309,7 +319,43 @@ describe('getTenancyById', () => {
     const tenancy = await getTenancyById(ctx, TENANCY_ACTIVE);
 
     expect(tenancy.tenant?.email).toBe('tariq@example.test');
+    expect(tenancy.tenant?.phone).toBe('+971500000001');
     expect(tenancy.unit?.unit_number).toBe('101');
+  });
+
+  /**
+   * The embed's contact details cannot come from the `select`: `0004_agentic.sql`
+   * revoked `tenants.email` and `tenants.phone` from every role. So the detail is only
+   * complete if the service hydrated through `tenant_contact()` — and if it did not, the
+   * fields come back null rather than erroring, which is why this is asserted on the
+   * query log and not only on the response.
+   */
+  it('hydrates the embedded tenant through tenant_contact, never through the select', async () => {
+    const { ctx, fake } = harness('property_manager');
+
+    const tenancy = await getTenancyById(ctx, TENANCY_ACTIVE);
+    expect(tenancy.tenant?.email).toBe('tariq@example.test');
+
+    for (const query of fake.against('tenants')) {
+      expect(query.select ?? '').not.toContain('email');
+      expect(query.select ?? '').not.toContain('phone');
+    }
+    expect(fake.rpcCalls('tenant_contact')).toHaveLength(1);
+  });
+
+  /**
+   * One RPC for the request, not one per row. `tenant_contact` takes a null
+   * `p_tenant_id` meaning "every tenant in this organization you may see", which is what
+   * makes a page of embeds a single round trip; pinning the argument here keeps a future
+   * per-row loop from passing unnoticed.
+   */
+  it('asks tenant_contact once, for the whole organization scope', async () => {
+    const { ctx, fake } = harness('property_manager');
+    await getTenancyById(ctx, TENANCY_ACTIVE);
+
+    const calls = fake.rpcCalls('tenant_contact');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.payload).toEqual({ p_organization_id: ORG_A, p_tenant_id: null });
   });
 
   it('embeds the tenant’s own record for that tenant', async () => {
@@ -318,6 +364,8 @@ describe('getTenancyById', () => {
     const tenancy = await getTenancyById(ctx, TENANCY_ACTIVE);
 
     expect(tenancy.tenant?.id).toBe(TENANT_ONE);
+    // §4 gives `tenant` "R self only", and that cell includes their own contact details.
+    expect(tenancy.tenant?.email).toBe('tariq@example.test');
   });
 
   it('does NOT embed the tenant for a property owner', async () => {
@@ -332,6 +380,20 @@ describe('getTenancyById', () => {
     expect(JSON.stringify(tenancy)).not.toContain('+971500000001');
     // The lease itself is still fully present.
     expect(tenancy.rent_amount).toBe('120000.00');
+  });
+
+  /**
+   * The RPC would refuse an owner anyway — `tenant_contact` raises 42501 for every role
+   * but staff and the tenant themselves — but the projection gate means it is never
+   * asked. Both halves matter: the refusal is the security boundary, and not asking is
+   * the proof that this lane does not treat a denied projection as a reason to try
+   * another route to the same two columns.
+   */
+  it('never asks tenant_contact for a property owner', async () => {
+    const { ctx, fake } = harness('property_owner');
+    await getTenancyById(ctx, TENANCY_ACTIVE);
+
+    expect(fake.rpcCalls('tenant_contact')).toHaveLength(0);
   });
 
   it('never fetches the tenant row at all for an owner', async () => {
@@ -378,11 +440,12 @@ describe('listOwnTenancies', () => {
 
   it('returns nothing when the profile has no tenant record', async () => {
     const tables = seedTables();
-    const fake = createFakeClient({ tables });
+    const caller = membership('tenant', { tenantId: null });
+    const fake = createFakeClient({ tables, caller });
 
     const own = await listOwnTenancies({
       supabase: fake.client,
-      membership: membership('tenant', { tenantId: null }),
+      membership: caller,
       logger: testLogger(),
     });
 
@@ -834,14 +897,16 @@ describe('unit occupancy', () => {
 
   it('does not fail the request when the unit write fails', async () => {
     const tables = seedTables();
+    const caller = membership('property_manager');
     const fake = createFakeClient({
       tables,
+      caller,
       failures: { 'update:property_units': { code: '42501', message: 'insufficient_privilege' } },
     });
     const logs = testLogger();
     const ctx: DataContext = {
       supabase: fake.client,
-      membership: membership('property_manager'),
+      membership: caller,
       logger: logs,
     };
 

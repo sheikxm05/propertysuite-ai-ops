@@ -32,9 +32,19 @@ export * from './document-extraction-job';
  * A function rather than a constant so each caller gets its own registry and two
  * runners in one process cannot mutate each other's.
  */
+import { createWhatsAppInboundHandler } from '@/services/integrations/server-only/inbound-job';
+
 import { createDocumentExtractionHandler } from './document-extraction-job';
 import { JobHandlerRegistry } from './runner';
 
 export function createDefaultRegistry(): JobHandlerRegistry {
-  return new JobHandlerRegistry().register(createDocumentExtractionHandler());
+  return new JobHandlerRegistry()
+    .register(createDocumentExtractionHandler())
+    // Registered here and not only in the simulate route. The route built its own
+    // registry so the demo could turn the crank synchronously; that left the PRODUCTION
+    // runner with no handler for `whatsapp_inbound`, so a real Meta delivery enqueued a
+    // job nothing could claim. The message landed, stayed `received`, and -- because
+    // attribution never ran -- kept a null organization, which the staff SELECT policy
+    // excludes. Invisible to everyone, which is exactly the failure 0005 describes.
+    .register(createWhatsAppInboundHandler());
 }

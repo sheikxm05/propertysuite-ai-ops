@@ -171,8 +171,21 @@ export const PROBES: Readonly<Record<TenantScopedTable, TableProbe>> = {
       full_name: 'Injected Resident',
       email: `injected-${randomUUID()}@example.test`,
     }),
-    patch: { patch: { phone: '+971599999999' }, column: 'phone' },
-    noopPatch: { patch: { phone: SHARED_SHAPE.tenantPhones[0] }, column: 'phone' },
+    // NOT `phone`, and not `email` either, since migration 0004.
+    //
+    // 0004 revoked SELECT on tenants.email and tenants.phone from EVERY client role,
+    // staff included — row level security filters rows, not columns, and all five
+    // application roles share the one Postgres role `authenticated`. Staff read them
+    // through the tenant_contact(p_organization_id, p_tenant_id) RPC instead.
+    //
+    // The write helpers read the patched column back through a principal entitled to
+    // see the row, to prove a refused UPDATE changed nothing. With `phone` here that
+    // verification read now returns 42501, and `readColumn` correctly raises — the
+    // harness being unable to check the row, reported as a harness fault rather than
+    // mistaken for a security finding. `full_name` is both writable and readable, so
+    // the assertion means the same thing it always did.
+    patch: { patch: { full_name: TAMPERED }, column: 'full_name' },
+    noopPatch: { patch: { full_name: SHARED_SHAPE.tenantNames[0] }, column: 'full_name' },
   },
 
   tenancies: {
@@ -424,6 +437,187 @@ export const PROBES: Readonly<Record<TenantScopedTable, TableProbe>> = {
     patch: { patch: { status: 'revoked' }, column: 'status' },
     // token_hash is deliberately not granted to any client role, so `select *` fails.
     columns: 'id,organization_id,email,role,status,expires_at',
+  },
+
+  /* ------------------------------------------------- migration 0004, agentic -- */
+
+  // A chunk is readable by exactly whoever may read its parent document, so every row
+  // below is chosen by which DOCUMENT it hangs off, mirroring the `documents` probe:
+  //   d1       -> property P1 + tenancy TC1  : staff, the owner of P1, tenant T1
+  //   d2       -> property P2 + tenancy TC3  : staff, tenant T2
+  //   evidence -> ticket K1 only             : staff, the assigned provider SP1
+  // The negatives are therefore the sharpest available: the owner is refused the chunk
+  // of the building they do not own, the tenant the chunk of the other tenant's
+  // contract, the provider the chunk of a contract they have no business reading.
+  document_chunks: {
+    anyRow: (f) => f.documentChunks.d1,
+    orgRow: (f) => f.documentChunks.d2,
+    inScope: (f, role) =>
+      role === 'service_provider' ? f.documentChunks.evidence : f.documentChunks.d1,
+    outOfScope: (f, role) =>
+      role === 'service_provider' ? f.documentChunks.d1 : f.documentChunks.d2,
+    // No client INSERT policy and no INSERT privilege: chunks are derived data written
+    // by the embedding worker under the service role. A client that could write a chunk
+    // could poison retrieval for its own organization, which is the one injection
+    // vector a RAG store has. Structurally valid so the refusal can only be
+    // authorization: a real parent document, a chunk_index that satisfies `>= 0`, and
+    // an index far from the seeded 0 so a unique violation cannot masquerade as one.
+    insertRow: ({ f }) => ({
+      id: randomUUID(),
+      organization_id: f.organizationId,
+      document_id: f.documents.d1,
+      chunk_index: 900 + Math.floor(Math.random() * 90),
+      content: 'Injected by the isolation suite.',
+      token_count: 8,
+    }),
+    patch: { patch: { content: TAMPERED }, column: 'content' },
+  },
+
+  // Staff read their own organization's inbox. The in-organization negative is the
+  // UNATTRIBUTED message — organization_id null, status `unmatched` — which belongs to
+  // no organization and must be visible to none. That row is the whole reason the
+  // column is nullable: a sender we cannot map to exactly one tenant is left
+  // unattributed rather than guessed into an organization, and guessing wrong would
+  // cross the exact boundary this project exists to defend.
+  inbound_messages: {
+    anyRow: (f) => f.inboundMessages.im1,
+    orgRow: (f) => f.inboundMessages.im1,
+    inScope: (f, role) =>
+      role === 'organization_admin' || role === 'property_manager' ? f.inboundMessages.im1 : null,
+    outOfScope: (f) => f.inboundMessages.unattributed,
+    // Service-role only: no INSERT policy, INSERT revoked. A client that could write
+    // here could forge the evidence an AI classification was based on.
+    insertRow: ({ f }) => ({
+      id: randomUUID(),
+      organization_id: f.organizationId,
+      provider: 'whatsapp',
+      external_message_id: `wamid.injected.${randomUUID()}`,
+      from_identifier: SHARED_SHAPE.tenantPhones[0],
+      body: 'Injected by the isolation suite.',
+      status: 'received',
+    }),
+    patch: { patch: { body: TAMPERED }, column: 'body' },
+  },
+
+  agent_runs: {
+    anyRow: (f) => f.agentRuns.ar1,
+    orgRow: (f) => f.agentRuns.ar1,
+    inScope: (f, role) =>
+      role === 'organization_admin' || role === 'property_manager' ? f.agentRuns.ar1 : null,
+    outOfScope: () => null, // Staff read organization-wide; the negative is cross-org.
+    insertRow: ({ f, actorProfileId }) => ({
+      id: randomUUID(),
+      organization_id: f.organizationId,
+      // agent_runs_insert_staff pins this to current_profile_id().
+      actor_profile_id: actorProfileId,
+      input: 'Injected by the isolation suite.',
+      status: 'running',
+    }),
+    // A run attributed to a COLLEAGUE: same organization, structurally perfect, and
+    // refused. Without this the `actor_profile_id = current_profile_id()` clause could
+    // be deleted and every assertion would still pass.
+    insertOutOfScope: ({ f }) => ({
+      id: randomUUID(),
+      organization_id: f.organizationId,
+      actor_profile_id: f.profiles[secondaryTenantKey(f)],
+      input: 'Started in somebody else`s name.',
+      status: 'running',
+    }),
+    patch: { patch: { status: 'cancelled' }, column: 'status' },
+    noopPatch: { patch: { status: 'running' }, column: 'status' },
+  },
+
+  // The decision surface. There is no UPDATE policy and no UPDATE privilege, so every
+  // role's UPDATE probe below asserts the absence that makes "the model proposes, a
+  // human commits" structural (CLAUDE.md rule 7) — the patch is the transition a
+  // compromised client would most want, and it must fail with 42501.
+  agent_proposals: {
+    anyRow: (f) => f.agentProposals.ap1,
+    orgRow: (f) => f.agentProposals.ap1,
+    inScope: (f, role) =>
+      role === 'organization_admin' || role === 'property_manager' ? f.agentProposals.ap1 : null,
+    outOfScope: () => null, // Staff read organization-wide; the negative is cross-org.
+    insertRow: ({ f }) => ({
+      id: randomUUID(),
+      organization_id: f.organizationId,
+      run_id: f.agentRuns.ar1,
+      tool_name: SHARED_SHAPE.proposalTool,
+      arguments: { property_unit_id: f.units.p1u1, category: 'hvac' },
+      rationale: 'Injected by the isolation suite.',
+      status: 'pending',
+      decided_by: null,
+      decided_at: null,
+    }),
+    // A proposal BORN APPROVED — the shape of a model committing its own work without a
+    // human in between. It satisfies agent_proposals_decision_consistent exactly (a
+    // decided row names its decider and when), so the only thing that can refuse it is
+    // the policy's `status = 'pending' and decided_by is null` clause.
+    insertOutOfScope: ({ f, actorProfileId }) => ({
+      id: randomUUID(),
+      organization_id: f.organizationId,
+      run_id: f.agentRuns.ar1,
+      tool_name: SHARED_SHAPE.proposalTool,
+      arguments: { property_unit_id: f.units.p1u1, category: 'hvac' },
+      rationale: 'Approved by nobody.',
+      status: 'approved',
+      decided_by: actorProfileId,
+      decided_at: '2026-06-01T00:00:00.000Z',
+    }),
+    patch: { patch: { status: 'approved' }, column: 'status' },
+  },
+
+  /* ----------------------------------- migration 0006, the outbound ledger -- */
+
+  // What we SENT a tenant. Staff of the owning organization read it; NOBODY else does,
+  // and the role that is most surprising to refuse is the tenant the message was
+  // addressed to. They already have the text — it arrived on their phone. What the row
+  // adds is `drafted_by` (was this reply written by the model?), `sent_by_profile_id`
+  // (which member of staff released it) and the delivery state, none of which is the
+  // tenant's to see. So the matrix gives tenant, owner and provider `none`, and the
+  // generated suite proves it with `expectNothingVisible` against a fixture whose rows
+  // are addressed to that very tenant's phone number.
+  //
+  // `outOfScope` is null on purpose: staff read organization-wide, so there is no
+  // in-organization negative for them, and the boundary that matters is the
+  // cross-organization one — asserted for every role, in both directions for staff, by
+  // cross-organization.test.ts.
+  outbound_messages: {
+    anyRow: (f) => f.outboundMessages.om1,
+    orgRow: (f) => f.outboundMessages.om1,
+    inScope: (f, role) =>
+      role === 'organization_admin' || role === 'property_manager' ? f.outboundMessages.om1 : null,
+    outOfScope: () => null,
+    // Service-role only: no INSERT policy and no INSERT privilege. A client that could
+    // write here could send a message to a tenant's real phone number in the
+    // organization's name — or, worse, fabricate the record of one it never sent and
+    // have the ledger agree with it.
+    //
+    // Structurally exact so a refusal can only be authorization. Every NOT NULL is
+    // populated, both enumerations take a legal value, and the row is deliberately
+    // `kind='staff_reply'` with `inbound_message_id` null: the partial unique index
+    // allows at most one `acknowledgement` per inbound message, and a payload that
+    // tripped it would come back 23505, which looks like a denial and proves nothing.
+    // `status='queued'` with no `sent_at` and no `provider_message_id` is the only
+    // internally consistent not-yet-sent shape, so no delivery-consistency check can
+    // reject it before RLS is reached either.
+    insertRow: ({ f, actorProfileId }) => ({
+      id: randomUUID(),
+      organization_id: f.organizationId,
+      inbound_message_id: null,
+      tenant_id: f.tenants.t1,
+      to_identifier: SHARED_SHAPE.tenantPhones[0],
+      body: 'Injected by the isolation suite.',
+      kind: 'staff_reply',
+      drafted_by: 'human',
+      sent_by_profile_id: actorProfileId,
+      provider: 'whatsapp',
+      provider_message_id: null,
+      status: 'queued',
+    }),
+    // The patch a compromised client would most want: rewrite what the record says we
+    // told a tenant. There is no UPDATE policy and no UPDATE privilege, so this must
+    // fail with 42501 rather than quietly matching zero rows.
+    patch: { patch: { body: TAMPERED }, column: 'body' },
   },
 };
 

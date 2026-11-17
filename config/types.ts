@@ -28,6 +28,13 @@ export const FEATURE_KEYS = [
   'maintenance',
   'ai-intake',
   'documents',
+  // Wave 3 — agentic capabilities. Added here because `NavEntry.key` is typed
+  // `FeatureKey`, so a nav entry for these surfaces could not otherwise typecheck.
+  // A key does NOT oblige a dashboard widget: `config/dashboard.slots.ts` composes an
+  // explicit list, and these three contribute none.
+  'inbox',
+  'ai-agent',
+  'ask',
 ] as const;
 
 export type FeatureKey = (typeof FEATURE_KEYS)[number];
